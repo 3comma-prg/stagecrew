@@ -1,0 +1,22 @@
+# UGREEN NAS 用（yaml + data フォルダ。ソースコードは不要）
+# 更新: Docker → プロジェクト → Compose 設定 → Redeploy → Pull latest image
+#
+# UGREEN: 「更新あり」→ 更新（Pull latest）でイメージを入れ替え
+# 完成品: ghcr.io/3comma-prg/stagecrew:latest
+
+services:
+  app:
+    image: ghcr.io/3comma-prg/stagecrew:latest
+    container_name: stagecrew
+    ports:
+      - "5173:5173"
+    env_file:
+      - .env
+    environment:
+      PORT: 5173
+      HOST: 0.0.0.0
+      SETTINGS_FILE: /app/data/app-settings.json
+      SETTINGS_DEFAULTS_FILE: /app/defaults/app-settings.json
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

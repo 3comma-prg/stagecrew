@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Noto Sans JP', 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer components {
+  .page-title {
+    @apply text-xl font-bold text-slate-900 md:text-2xl;
+  }
+  .page-toolbar {
+    @apply mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between;
+  }
+  .card {
+    @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+  }
+  .list-card {
+    @apply rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col gap-3 p-4 transition-all hover:shadow-md sm:flex-row sm:items-center sm:gap-4;
+  }
+  .list-card-main {
+    @apply flex min-w-0 flex-1 items-start gap-3;
+  }
+  .list-card-icon {
+    @apply flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-600;
+  }
+  .btn-primary {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-teal-700 hover:shadow active:scale-95 disabled:opacity-50 md:min-h-0 md:py-2;
+  }
+  .btn-secondary {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 active:scale-95 md:min-h-0 md:py-2;
+  }
+  .btn-danger {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-600 transition-all hover:bg-red-50 md:min-h-0 md:py-1.5;
+  }
+  .btn-icon {
+    @apply inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 md:min-h-0 md:min-w-0;
+  }
+  .table-scroll {
+    @apply -mx-4 overflow-x-auto px-4 md:mx-0 md:px-0;
+  }
+  .row-actions {
+    @apply flex gap-1 opacity-100 md:opacity-0 md:transition-opacity md:group-hover:opacity-100;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Smooth transitions */
+* {
+  transition-property: background-color, border-color, color, fill, stroke, opacity, box-shadow, transform;
+  transition-duration: 150ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Print styles for invoice PDF */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+  }
+  .print-area {
+    box-shadow: none !important;
+    border: none !important;
+  }
+}

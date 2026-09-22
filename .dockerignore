@@ -1,0 +1,24 @@
+# 依存・ビルド成果物
+node_modules
+dist
+dist-server
+dist-ssr
+
+# 秘密情報・ローカル設定（イメージに入れない）
+.env
+.env.*
+!.env.example
+data/*.json
+
+# 開発用・不要ファイル
+.git
+.cursor
+.vscode
+.idea
+*.local
+*.log
+npm-debug.log*
+**/.DS_Store
+coverage
+*.md
+!README.md

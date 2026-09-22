@@ -1,0 +1,21 @@
+# PC 上でソースからビルドして試すとき用
+# docker compose -f docker-compose.build.yml up --build
+
+services:
+  app:
+    build:
+      context: .
+    image: stagecrew:local
+    container_name: stagecrew
+    ports:
+      - "5173:5173"
+    env_file:
+      - .env
+    environment:
+      PORT: 5173
+      HOST: 0.0.0.0
+      SETTINGS_FILE: /app/data/app-settings.json
+      SETTINGS_DEFAULTS_FILE: /app/defaults/app-settings.json
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
