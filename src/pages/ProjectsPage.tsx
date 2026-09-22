@@ -13,6 +13,7 @@ import {
   clientName,
   compareCreatedAt,
   DEFAULT_TASK_TYPE,
+  getTaskSubtitle,
 } from '@/types';
 import { Modal } from '@/components/ui/Modal';
 import { FormErrorList, FormField, fieldErrorClass, inputClass } from '@/components/ui/FormField';
@@ -41,18 +42,6 @@ import {
 } from 'lucide-react';
 
 type ProjectSortKey = 'created_at' | 'earliest_task' | 'client_name' | 'project_name';
-
-const VENUE_TASK_TYPES = ['仕込み/本番', '本番', '仕込み', 'バラシ', 'GP', '仮組'];
-
-function getTaskSubtitle(task: Task): string {
-  if (VENUE_TASK_TYPES.includes(task.task_type)) {
-    const parts: string[] = [];
-    if (task.area) parts.push(task.area);
-    if (task.location) parts.push(task.location);
-    return parts.join(' / ');
-  }
-  return task.task_type;
-}
 
 export function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);

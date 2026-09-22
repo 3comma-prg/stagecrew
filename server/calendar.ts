@@ -78,7 +78,8 @@ function zonedParts(iso: string) {
 function taskSubtitle(task: Row) {
   const type = asString(task.task_type);
   if (VENUE_TASK_TYPES.includes(type)) {
-    return [asString(task.area), asString(task.location)].filter(Boolean).join(' / ');
+    const venue = [asString(task.area), asString(task.location)].filter(Boolean).join(' / ');
+    if (venue) return venue;
   }
   return type;
 }

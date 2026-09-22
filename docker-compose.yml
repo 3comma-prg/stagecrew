@@ -2,11 +2,12 @@
 # 更新: Docker → プロジェクト → Compose 設定 → Redeploy → Pull latest image
 #
 # UGREEN: 「更新あり」→ 更新（Pull latest）でイメージを入れ替え
-# 完成品: ghcr.io/3comma-prg/stagecrew:latest
+# 完成品: ghcr.io/3comma-prg/stagecrew:alpha_1.0.0
+# 画面表示は ver α_1.0.0。Docker タグに α は使えないため alpha と表記する。
 
 services:
   app:
-    image: ghcr.io/3comma-prg/stagecrew:latest
+    image: ghcr.io/3comma-prg/stagecrew:alpha_1.0.0
     container_name: stagecrew
     ports:
       - "5173:5173"

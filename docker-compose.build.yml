@@ -5,7 +5,7 @@ services:
   app:
     build:
       context: .
-    image: stagecrew:local
+    image: stagecrew:alpha_1.0.0
     container_name: stagecrew
     ports:
       - "5173:5173"

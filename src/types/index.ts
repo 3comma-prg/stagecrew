@@ -28,6 +28,8 @@ export function compareCreatedAt(a: { created_at?: string | null }, b: { created
 export const DEFAULT_APP_NAME = 'Stagecrew';
 export const DEFAULT_APP_TAGLINE = '業務管理';
 export const DEFAULT_APP_FOOTER = 'スケジュール・請求書管理システム';
+/** 画面表示。Docker タグは alpha_1.0.0（タグに α は使えない）。 */
+export const APP_VERSION_LABEL = 'ver α_1.0.0';
 
 export interface GoogleIntegrationSettings {
   id: number;
@@ -447,10 +449,8 @@ export const VENUE_TASK_TYPES = ['仕込み/本番', '本番', '仕込み', 'バ
 
 export function getTaskSubtitle(task: Task): string {
   if (VENUE_TASK_TYPES.includes(task.task_type)) {
-    const parts: string[] = [];
-    if (task.area) parts.push(task.area);
-    if (task.location) parts.push(task.location);
-    return parts.join(' / ');
+    const parts = [task.area, task.location].map((value) => (value || '').trim()).filter(Boolean);
+    if (parts.length > 0) return parts.join(' / ');
   }
   return task.task_type;
 }

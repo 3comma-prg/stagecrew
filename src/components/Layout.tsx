@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { CalendarRefreshButton } from '@/components/CalendarRefreshButton';
 import { loadSettings, subscribeSettings } from '@/lib/local-store';
-import { displayAppFooter, displayAppName, displayAppTagline } from '@/types';
+import { APP_VERSION_LABEL, displayAppFooter, displayAppName, displayAppTagline } from '@/types';
 
 export type PageKey =
   | 'dashboard'
@@ -151,6 +151,7 @@ export function Layout({ currentPage, onNavigate, children }: LayoutProps) {
 
         <div className="space-y-2 px-3 py-4">
           <CalendarRefreshButton variant="sidebar" />
+          <p className="px-3 text-[11px] leading-tight text-slate-500">{APP_VERSION_LABEL}</p>
           {footerLines.length > 0 ? (
             <p className="whitespace-pre-line px-3 text-xs text-slate-500">
               {footerLines.map((line, index) => (

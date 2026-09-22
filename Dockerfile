@@ -16,6 +16,9 @@ RUN npm run build
 
 FROM node:20-alpine AS production
 
+LABEL org.opencontainers.image.version="alpha_1.0.0" \
+      org.opencontainers.image.title="stagecrew"
+
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=5173
