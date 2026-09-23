@@ -10,7 +10,8 @@ import { TaxRateField } from '@/components/ui/TaxRateField';
 import { useCatalogOptions } from '@/lib/catalog-options';
 import { moveIndex } from '@/lib/reorder';
 import { useSessionPref } from '@/lib/session-list-prefs';
-import { Plus, Pencil, Trash2, JapaneseYen, Search, Globe, ArrowUpDown, GripVertical, RefreshCw, Copy } from 'lucide-react';
+import { SortBar, applySortDir, type SortDir } from '@/components/ui/SortBar';
+import { Plus, Pencil, Trash2, JapaneseYen, Search, Globe, GripVertical, RefreshCw, Copy } from 'lucide-react';
 
 type UnitPriceSortKey = 'sort_order' | 'created_at' | 'client' | 'price' | 'task_type' | 'position' | 'venue_size';
 
@@ -25,8 +26,9 @@ export function UnitPricesPage() {
     positionFilter: 'all',
     taskTypeFilter: 'all',
     sortBy: 'sort_order' as UnitPriceSortKey,
+    sortDir: 'asc' as SortDir,
   });
-  const { clientFilter, domesticFilter, positionFilter, taskTypeFilter, sortBy } = listPrefs;
+  const { clientFilter, domesticFilter, positionFilter, taskTypeFilter, sortBy, sortDir } = listPrefs;
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<UnitPrice | null>(null);
   const [saving, setSaving] = useState(false);
@@ -230,7 +232,7 @@ export function UnitPricesPage() {
     if (from == null || to == null || from === to) return;
     persistLockRef.current = true;
     const next = moveIndex(sorted, from, to);
-    patchListPrefs({ sortBy: 'sort_order' });
+    patchListPrefs({ sortBy: 'sort_order', sortDir: 'asc' });
     persistOrder(next)
       .catch((error) => {
         console.error('Error reordering unit prices:', error);
@@ -283,26 +285,22 @@ export function UnitPricesPage() {
   });
 
   const sorted = [...filtered].sort((a, b) => {
-    if (sortBy === 'sort_order') return compareUnitPriceOrder(a, b);
-    if (sortBy === 'created_at') return compareCreatedAt(a, b);
-    if (sortBy === 'client') {
-      return clientName(a.client).localeCompare(clientName(b.client), 'ja');
-    }
-    if (sortBy === 'price') {
-      return b.price - a.price;
-    }
-    if (sortBy === 'task_type') {
+    let result = 0;
+    if (sortBy === 'sort_order') result = compareUnitPriceOrder(a, b);
+    else if (sortBy === 'created_at') result = compareCreatedAt(a, b);
+    else if (sortBy === 'client') {
+      result = clientName(a.client).localeCompare(clientName(b.client), 'ja');
+    } else if (sortBy === 'price') {
+      result = a.price - b.price;
+    } else if (sortBy === 'task_type') {
       const byType = compareCatalogOrder(a.task_type, b.task_type, taskTypes);
-      if (byType !== 0) return byType;
-      return compareUnitPriceOrder(a, b);
+      result = byType !== 0 ? byType : compareUnitPriceOrder(a, b);
+    } else if (sortBy === 'position') {
+      result = a.position.localeCompare(b.position, 'ja');
+    } else if (sortBy === 'venue_size') {
+      result = (a.venue_size || '').localeCompare(b.venue_size || '', 'ja');
     }
-    if (sortBy === 'position') {
-      return a.position.localeCompare(b.position, 'ja');
-    }
-    if (sortBy === 'venue_size') {
-      return (a.venue_size || '').localeCompare(b.venue_size || '', 'ja');
-    }
-    return 0;
+    return applySortDir(result, sortDir);
   });
 
   const formatYen = (n: number) => `¥${n.toLocaleString()}`;
@@ -397,31 +395,20 @@ export function UnitPricesPage() {
         </div>
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <ArrowUpDown className="h-4 w-4 text-slate-400" />
-        <span className="text-sm text-slate-500">並び替え:</span>
-        {([
-          { key: 'sort_order', label: '並び順' },
-          { key: 'created_at', label: '登録順' },
-          { key: 'client', label: 'クライアント名' },
-          { key: 'task_type', label: '種別' },
-          { key: 'position', label: 'ポジション' },
-          { key: 'venue_size', label: '規模' },
-          { key: 'price', label: '単価' },
-        ] as { key: UnitPriceSortKey; label: string }[]).map((s) => (
-          <button
-            key={s.key}
-            onClick={() => patchListPrefs({ sortBy: s.key })}
-            className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-all ${
-              sortBy === s.key
-                ? 'bg-teal-100 text-teal-700 border border-teal-200'
-                : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-50'
-            }`}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
+      <SortBar
+        options={[
+          { key: 'sort_order' as const, label: '並び順' },
+          { key: 'created_at' as const, label: '登録順' },
+          { key: 'client' as const, label: 'クライアント名' },
+          { key: 'task_type' as const, label: '種別' },
+          { key: 'position' as const, label: 'ポジション' },
+          { key: 'venue_size' as const, label: '規模' },
+          { key: 'price' as const, label: '単価' },
+        ]}
+        sortBy={sortBy}
+        sortDir={sortDir}
+        onChange={patchListPrefs}
+      />
 
       {loading ? (
         <div className="flex items-center justify-center py-20">

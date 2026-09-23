@@ -117,7 +117,23 @@ function migrate(database: Database) {
   database.run(
     `UPDATE tasks SET billing_status = 'not_billable' WHERE is_billable = 0 AND (billing_status IS NULL OR billing_status = '' OR billing_status = 'unbilled')`
   );
+  backfillSortOrder(database, 'clients');
   database.run('PRAGMA foreign_keys = ON');
+}
+
+function backfillSortOrder(database: Database, table: string) {
+  const missing = database.exec(
+    `SELECT id FROM "${table}" WHERE sort_order IS NULL ORDER BY created_at, id`
+  );
+  const ids = (missing[0]?.values || []).map((row) => String(row[0]));
+  if (ids.length === 0) return;
+  const maxInfo = database.exec(`SELECT MAX(sort_order) FROM "${table}"`);
+  const maxValue = maxInfo[0]?.values?.[0]?.[0];
+  let next = typeof maxValue === 'number' ? maxValue + 1 : 0;
+  for (const id of ids) {
+    database.run(`UPDATE "${table}" SET sort_order = ? WHERE id = ?`, [next, id]);
+    next += 1;
+  }
 }
 
 export function databasePath(env: Env) {
@@ -299,13 +315,21 @@ export function replaceInvoiceItems(invoiceId: string, items: Row[]) {
   persist();
 }
 
-export function reorderUnitPrices(ids: string[]) {
+function reorderSheet(key: 'clients' | 'unit_prices', ids: string[]) {
   const database = getDatabase();
   ids.forEach((id, index) => {
-    database.run('UPDATE unit_prices SET sort_order = ? WHERE id = ?', [index, id]);
+    database.run(`UPDATE "${key}" SET sort_order = ? WHERE id = ?`, [index, id]);
   });
   persist();
   return { ok: true as const };
+}
+
+export function reorderUnitPrices(ids: string[]) {
+  return reorderSheet('unit_prices', ids);
+}
+
+export function reorderClients(ids: string[]) {
+  return reorderSheet('clients', ids);
 }
 
 export function clearTable(key: SheetKey) {

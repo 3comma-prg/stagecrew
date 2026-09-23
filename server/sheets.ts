@@ -13,6 +13,7 @@ import {
   deleteRow,
   listRows,
   openDatabase,
+  reorderClients,
   reorderUnitPrices,
   replaceAllRows,
   replaceInvoiceItems,
@@ -552,13 +553,20 @@ export function createSheetsApi(env: Env) {
         return;
       }
 
-      if (req.method === 'POST' && url.pathname === '/api/sheets/unit_prices/reorder') {
+      if (
+        req.method === 'POST' &&
+        (url.pathname === '/api/sheets/unit_prices/reorder' || url.pathname === '/api/sheets/clients/reorder')
+      ) {
         const body = JSON.parse((await readBody(req)) || '{}') as { ids?: string[] };
         if (!Array.isArray(body.ids) || body.ids.length === 0) {
           send(res, 400, { error: '並び順がありません。' });
           return;
         }
-        send(res, 200, reorderUnitPrices(body.ids));
+        send(
+          res,
+          200,
+          url.pathname.endsWith('/clients/reorder') ? reorderClients(body.ids) : reorderUnitPrices(body.ids)
+        );
         return;
       }
 

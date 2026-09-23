@@ -1,7 +1,7 @@
-import { Fragment, useEffect, useState, useCallback } from 'react';
-import { deleteClient, deleteUnitPrice, listClients, listUnitPrices, saveClient, saveUnitPrice, applyCatalogPricesToDraftInvoices } from '@/lib/db';
+import { Fragment, useEffect, useState, useCallback, useRef } from 'react';
+import { deleteClient, deleteUnitPrice, listClients, listUnitPrices, reorderClients, saveClient, saveUnitPrice, applyCatalogPricesToDraftInvoices } from '@/lib/db';
 import type { Client, UnitPrice, VenueSize, TaxType } from '@/types';
-import { DEFAULT_TASK_TYPE, VENUE_SIZES, GOOGLE_CALENDAR_COLORS, clientName, normalizeTaxType, taxSettingLabel } from '@/types';
+import { DEFAULT_TASK_TYPE, VENUE_SIZES, GOOGLE_CALENDAR_COLORS, clientName, compareCreatedAt, compareUnitPriceOrder, normalizeTaxType, taxSettingLabel } from '@/types';
 import {
   BILLING_TIMING_LABELS,
   DEFAULT_SHOW_GROUP_GAP_DAYS,
@@ -17,15 +17,40 @@ import { AddableSelect } from '@/components/ui/AddableSelect';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SplitDetailLayout } from '@/components/ui/SplitDetailLayout';
 import { TaxRateField } from '@/components/ui/TaxRateField';
-import { Plus, Pencil, Trash2, Users, Search, Mail, Phone, MapPin, Building2, X, JapaneseYen, Copy } from 'lucide-react';
+import { Plus, Pencil, Trash2, Users, Search, Mail, Phone, MapPin, Building2, X, JapaneseYen, Copy, GripVertical } from 'lucide-react';
 import { formatPostalCode, lookupPostalAddress, postalDigits } from '@/lib/postal';
 import { Badge } from '@/components/ui/Badge';
 import { useCatalogOptions } from '@/lib/catalog-options';
+import { useSessionPref } from '@/lib/session-list-prefs';
+import { SortBar, applySortDir, type SortDir } from '@/components/ui/SortBar';
+import { moveIndex } from '@/lib/reorder';
+
+type ClientSortKey = 'sort_order' | 'created_at' | 'client_name' | 'tax_rate' | 'calendar_color';
+
+function calendarColorRank(id: number | null) {
+  if (id == null || id <= 0) return GOOGLE_CALENDAR_COLORS.length;
+  const index = GOOGLE_CALENDAR_COLORS.findIndex((color) => color.id === id);
+  return index < 0 ? GOOGLE_CALENDAR_COLORS.length : index;
+}
 
 export function ClientsPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [listPrefs, patchListPrefs] = useSessionPref('clients', {
+    sortBy: 'sort_order' as ClientSortKey,
+    sortDir: 'asc' as SortDir,
+  });
+  const { sortBy, sortDir } = listPrefs;
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const dragFromRef = useRef<number | null>(null);
+  const dragOverRef = useRef<number | null>(null);
+  const clientsRef = useRef<Client[]>([]);
+  const savedOrderRef = useRef('');
+  const persistLockRef = useRef(false);
+  const suppressClickRef = useRef(false);
+  clientsRef.current = clients;
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Client | null>(null);
   const [saving, setSaving] = useState(false);
@@ -53,15 +78,16 @@ export function ClientsPage() {
   });
   const { taskTypes } = useCatalogOptions();
 
-  const fetchClients = useCallback(async () => {
-    setLoading(true);
+  const fetchClients = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) setLoading(true);
     try {
       const data = await listClients();
       setClients(data);
+      savedOrderRef.current = [...data].sort(compareUnitPriceOrder).map((item) => item.id).join(',');
     } catch (error) {
       console.error('Error fetching clients:', error);
     }
-    setLoading(false);
+    if (!options?.silent) setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -185,6 +211,72 @@ export function ClientsPage() {
     fetchClients();
   };
 
+  const persistOrder = async (ordered: Client[]) => {
+    const hidden = clientsRef.current.filter((item) => !ordered.some((visible) => visible.id === item.id));
+    const next = [...ordered, ...hidden].map((item, index) => ({ ...item, sort_order: index }));
+    clientsRef.current = next;
+    setClients(next);
+    const ids = next.map((item) => item.id);
+    const signature = ids.join(',');
+    if (signature === savedOrderRef.current) return;
+    savedOrderRef.current = signature;
+    await reorderClients(ids);
+  };
+
+  const finishDrag = () => {
+    if (persistLockRef.current) return;
+    const from = dragFromRef.current;
+    const to = dragOverRef.current;
+    dragFromRef.current = null;
+    dragOverRef.current = null;
+    setDraggingIndex(null);
+    setDragOverIndex(null);
+    if (from == null || to == null || from === to) return;
+    persistLockRef.current = true;
+    const next = moveIndex(sorted, from, to);
+    patchListPrefs({ sortBy: 'sort_order', sortDir: 'asc' });
+    persistOrder(next)
+      .catch((error) => {
+        console.error('Error reordering clients:', error);
+        savedOrderRef.current = '';
+        fetchClients({ silent: true });
+      })
+      .finally(() => {
+        persistLockRef.current = false;
+      });
+  };
+
+  const dragHandleProps = (index: number) => ({
+    draggable: true as const,
+    onDragStart: (e: React.DragEvent) => {
+      e.stopPropagation();
+      suppressClickRef.current = true;
+      dragFromRef.current = index;
+      dragOverRef.current = index;
+      setDraggingIndex(index);
+      setDragOverIndex(index);
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(index));
+    },
+    onDragEnd: finishDrag,
+  });
+
+  const dropTargetProps = (index: number) => ({
+    onDragOver: (e: React.DragEvent) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (dragOverRef.current !== index) {
+        dragOverRef.current = index;
+        setDragOverIndex(index);
+      }
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      dragOverRef.current = index;
+      finishDrag();
+    },
+  });
+
   const filtered = clients.filter((c) => {
     const q = search.toLowerCase();
     return (
@@ -195,6 +287,22 @@ export function ClientsPage() {
       (c.address || '').toLowerCase().includes(q) ||
       (c.email || '').toLowerCase().includes(q)
     );
+  });
+
+  const sorted = [...filtered].sort((a, b) => {
+    let result = 0;
+    if (sortBy === 'sort_order') result = compareUnitPriceOrder(a, b);
+    else if (sortBy === 'created_at') result = compareCreatedAt(a, b);
+    else if (sortBy === 'client_name') {
+      const nameA = clientName(a) || 'zzz';
+      const nameB = clientName(b) || 'zzz';
+      result = nameA.localeCompare(nameB, 'ja');
+    } else if (sortBy === 'tax_rate') {
+      result = (a.tax_rate ?? 0) - (b.tax_rate ?? 0) || a.tax_type.localeCompare(b.tax_type);
+    } else {
+      result = calendarColorRank(a.google_calendar_color_id) - calendarColorRank(b.google_calendar_color_id);
+    }
+    return applySortDir(result, sortDir);
   });
 
   return (
@@ -221,11 +329,24 @@ export function ClientsPage() {
         />
       </div>
 
+      <SortBar
+        options={[
+          { key: 'sort_order' as const, label: '並び順' },
+          { key: 'created_at' as const, label: '登録順' },
+          { key: 'client_name' as const, label: 'クライアント名' },
+          { key: 'tax_rate' as const, label: '消費税率' },
+          { key: 'calendar_color' as const, label: 'カレンダーカラー' },
+        ]}
+        sortBy={sortBy}
+        sortDir={sortDir}
+        onChange={patchListPrefs}
+      />
+
       {loading ? (
         <div className="flex items-center justify-center py-20">
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-teal-600" />
         </div>
-      ) : filtered.length === 0 ? (
+      ) : sorted.length === 0 ? (
         <div className="card">
           <EmptyState
             icon={<Users className="h-7 w-7" />}
@@ -239,15 +360,38 @@ export function ClientsPage() {
           pane={selectedClient ? <UnitPricePane client={selectedClient} onClose={() => setSelectedClient(null)} /> : null}
         >
           {({ isDesktop }) =>
-            filtered.map((client) => (
+            sorted.map((client, index) => (
               <Fragment key={client.id}>
                 <div
                   className={`list-card group cursor-pointer ${
                     selectedClient?.id === client.id ? 'ring-2 ring-teal-500' : ''
+                  } ${
+                    draggingIndex === index
+                      ? 'opacity-60 ring-1 ring-teal-300'
+                      : dragOverIndex === index
+                        ? 'ring-1 ring-teal-400'
+                        : ''
                   }`}
-                  onClick={() => setSelectedClient((current) => (current?.id === client.id ? null : client))}
+                  onClick={() => {
+                    if (suppressClickRef.current) {
+                      suppressClickRef.current = false;
+                      return;
+                    }
+                    setSelectedClient((current) => (current?.id === client.id ? null : client));
+                  }}
+                  {...dropTargetProps(index)}
                 >
                   <div className="list-card-main">
+                    <button
+                      type="button"
+                      className="btn-icon mt-1 cursor-grab text-slate-400 hover:text-slate-600 active:cursor-grabbing"
+                      aria-label="並び替え"
+                      title="ドラッグして並べ替え"
+                      onClick={(e) => e.stopPropagation()}
+                      {...dragHandleProps(index)}
+                    >
+                      <GripVertical className="h-4 w-4" />
+                    </button>
                     <div className="list-card-icon">
                       <Building2 className="h-6 w-6" />
                     </div>

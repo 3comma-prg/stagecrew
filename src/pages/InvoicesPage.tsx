@@ -54,6 +54,7 @@ import { checkDrivePdfExists, createInvoiceGmailDraft, ensureInvoicePdf, fetchIn
 import { InvoicePdfPages } from '@/components/InvoicePdfPages';
 import { loadSettings } from '@/lib/local-store';
 import { useSessionPref } from '@/lib/session-list-prefs';
+import { SortBar, applySortDir, type SortDir } from '@/components/ui/SortBar';
 import { findUnitPriceAmount, findMatchingUnitPrice, isUnsetInvoicePrice, taxTypeForTask } from '@/lib/unit-price-match';
 import { Modal } from '@/components/ui/Modal';
 import { FormErrorList, FormField, fieldErrorClass, inputClass } from '@/components/ui/FormField';
@@ -72,7 +73,6 @@ import {
   JapaneseYen,
   Calendar,
   Sparkles,
-  ArrowUpDown,
   GripVertical,
   AlertTriangle,
   RefreshCw,
@@ -511,9 +511,10 @@ export function InvoicesPage() {
   const [listPrefs, patchListPrefs] = useSessionPref('invoices', {
     clientFilter: 'all',
     monthFilter: 'all',
-    sortBy: 'created_at' as InvoiceSortKey,
+    sortBy: 'billing_month' as InvoiceSortKey,
+    sortDir: 'desc' as SortDir,
   });
-  const { clientFilter, monthFilter, sortBy } = listPrefs;
+  const { clientFilter, monthFilter, sortBy, sortDir } = listPrefs;
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<InvoiceWithItems | null>(null);
   const [previewing, setPreviewing] = useState<InvoiceWithItems | null>(null);
@@ -1105,23 +1106,19 @@ export function InvoicesPage() {
   });
 
   const sorted = [...filtered].sort((a, b) => {
-    if (sortBy === 'created_at') return compareCreatedAt(a, b);
-    if (sortBy === 'billing_month') {
-      return b.billing_month.localeCompare(a.billing_month);
-    }
-    if (sortBy === 'client_name') {
+    let result = 0;
+    if (sortBy === 'created_at') result = compareCreatedAt(a, b);
+    else if (sortBy === 'billing_month') result = a.billing_month.localeCompare(b.billing_month);
+    else if (sortBy === 'client_name') {
       const nameA = (clientName(a.client) || 'zzz').toLowerCase();
       const nameB = (clientName(b.client) || 'zzz').toLowerCase();
-      return nameA.localeCompare(nameB, 'ja');
-    }
-    if (sortBy === 'amount') {
-      return b.total_amount - a.total_amount;
-    }
-    if (sortBy === 'status') {
+      result = nameA.localeCompare(nameB, 'ja');
+    } else if (sortBy === 'amount') result = a.total_amount - b.total_amount;
+    else if (sortBy === 'status') {
       const order = { draft: 0, issued: 1, paid: 2 };
-      return (order[a.status] ?? 9) - (order[b.status] ?? 9);
+      result = (order[a.status] ?? 9) - (order[b.status] ?? 9);
     }
-    return 0;
+    return applySortDir(result, sortDir);
   });
 
   const months = [...new Set(invoices.map((i) => i.billing_month))].sort().reverse();
@@ -1850,29 +1847,18 @@ export function InvoicesPage() {
         </div>
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <ArrowUpDown className="h-4 w-4 text-slate-400" />
-        <span className="text-sm text-slate-500">並び替え:</span>
-        {([
-          { key: 'created_at', label: '登録順' },
-          { key: 'billing_month', label: '請求月' },
-          { key: 'client_name', label: 'クライアント名' },
-          { key: 'status', label: 'ステータス' },
-          { key: 'amount', label: '金額' },
-        ] as { key: InvoiceSortKey; label: string }[]).map((s) => (
-          <button
-            key={s.key}
-            onClick={() => patchListPrefs({ sortBy: s.key })}
-            className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-all ${
-              sortBy === s.key
-                ? 'bg-teal-100 text-teal-700 border border-teal-200'
-                : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-50'
-            }`}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
+      <SortBar
+        options={[
+          { key: 'billing_month' as const, label: '請求月' },
+          { key: 'created_at' as const, label: '登録順' },
+          { key: 'client_name' as const, label: 'クライアント名' },
+          { key: 'status' as const, label: 'ステータス' },
+          { key: 'amount' as const, label: '金額' },
+        ]}
+        sortBy={sortBy}
+        sortDir={sortDir}
+        onChange={patchListPrefs}
+      />
 
       {loading ? (
         <div className="flex items-center justify-center py-20">

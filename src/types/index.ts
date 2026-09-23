@@ -20,6 +20,7 @@ export interface Client {
   billing_timing: string | null;
   /** Days; shows within this gap merge into one billing group (default 14) */
   show_group_gap_days: number | null;
+  sort_order: number | null;
   created_at: string;
 }
 
@@ -31,11 +32,20 @@ export function compareCreatedAt(a: { created_at?: string | null }, b: { created
   return (a.created_at || '').localeCompare(b.created_at || '');
 }
 
+export function compareTaskDate(
+  a: { start_date?: string | null; date?: string | null; start_time?: string | null },
+  b: { start_date?: string | null; date?: string | null; start_time?: string | null }
+) {
+  const aDate = `${a.start_date || a.date || ''} ${a.start_time || ''}`;
+  const bDate = `${b.start_date || b.date || ''} ${b.start_time || ''}`;
+  return aDate.localeCompare(bDate);
+}
+
 export const DEFAULT_APP_NAME = 'Stagecrew';
 export const DEFAULT_APP_TAGLINE = '業務管理';
 export const DEFAULT_APP_FOOTER = 'スケジュール・請求書管理システム';
-/** 画面表示。Docker タグは alpha_3.4.0（タグに α は使えない）。 */
-export const APP_VERSION_LABEL = 'ver α_3.4.0';
+/** 画面表示。Docker タグは alpha_3.5.0（タグに α は使えない）。 */
+export const APP_VERSION_LABEL = 'ver α_3.5.0';
 
 export interface GoogleIntegrationSettings {
   id: number;
@@ -404,6 +414,47 @@ export const TASK_TYPE_ALIASES: Record<string, string> = {
 export function canonicalTaskType(name: string) {
   const trimmed = (name || '').trim();
   return TASK_TYPE_ALIASES[trimmed] || trimmed;
+}
+
+/** プロジェクトの「日付」で、仕込み/本番・本番・仕込みを1つの基準にする */
+export const PROJECT_DATE_BASIS_ALL = 'all';
+export const PROJECT_DATE_BASIS_SHOW = 'show_types';
+export const PROJECT_DATE_SHOW_TYPES = ['仕込み/本番', '本番', '仕込み'] as const;
+
+export function projectDateBasisChoices(taskTypes: string[]) {
+  const grouped = new Set(PROJECT_DATE_SHOW_TYPES.map((name) => canonicalTaskType(name)));
+  const rest = taskTypes.filter((name) => !grouped.has(canonicalTaskType(name)));
+  return [
+    { value: PROJECT_DATE_BASIS_ALL, label: 'すべて' },
+    { value: PROJECT_DATE_BASIS_SHOW, label: '仕込み/本番・本番・仕込み' },
+    ...rest.map((name) => ({ value: name, label: name })),
+  ];
+}
+
+export function resolveProjectDateBasis(basis: string, taskTypes: string[]) {
+  if (basis === PROJECT_DATE_BASIS_ALL || basis === PROJECT_DATE_BASIS_SHOW) return basis;
+  if (taskTypes.some((name) => canonicalTaskType(name) === canonicalTaskType(basis))) return basis;
+  return PROJECT_DATE_BASIS_ALL;
+}
+
+export function matchesProjectDateBasis(taskType: string, basis: string) {
+  if (basis === PROJECT_DATE_BASIS_ALL) return true;
+  const name = canonicalTaskType(taskType);
+  if (basis === PROJECT_DATE_BASIS_SHOW) {
+    return PROJECT_DATE_SHOW_TYPES.some((type) => canonicalTaskType(type) === name);
+  }
+  return name === canonicalTaskType(basis);
+}
+
+export function earliestDateForProject(
+  tasks: { task_type: string; start_date?: string | null }[],
+  basis: string
+) {
+  const dates = tasks
+    .filter((task) => task.start_date && matchesProjectDateBasis(task.task_type, basis))
+    .map((task) => task.start_date as string)
+    .sort();
+  return dates[0] || null;
 }
 
 export const POSITIONS: string[] = ['卓', 'テック', 'その他'];

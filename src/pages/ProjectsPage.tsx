@@ -12,8 +12,13 @@ import {
   formatTaskDateRange,
   clientName,
   compareCreatedAt,
+  compareTaskDate,
   DEFAULT_TASK_TYPE,
+  earliestDateForProject,
   getTaskSubtitle,
+  PROJECT_DATE_BASIS_ALL,
+  projectDateBasisChoices,
+  resolveProjectDateBasis,
 } from '@/types';
 import { Modal } from '@/components/ui/Modal';
 import { FormErrorList, FormField, fieldErrorClass, inputClass } from '@/components/ui/FormField';
@@ -41,6 +46,7 @@ import {
 import { CancelledBanner, CancelledTitle, cancelledCardClass } from '@/components/CancelledMark';
 import { CollapsedSection } from '@/components/CollapsedSection';
 import { useSessionPref } from '@/lib/session-list-prefs';
+import { SortBar, applySortDir, type SortDir } from '@/components/ui/SortBar';
 import {
   Plus,
   Pencil,
@@ -52,7 +58,6 @@ import {
   Globe,
   Ban,
   X,
-  ArrowUpDown,
   Copy,
 } from 'lucide-react';
 
@@ -65,11 +70,16 @@ export function ProjectsPage() {
   const [search, setSearch] = useState('');
   const [listPrefs, patchListPrefs] = useSessionPref('projects', {
     statusFilter: 'all' as ProjectStatus | 'all',
-    sortBy: 'created_at' as ProjectSortKey,
+    sortBy: 'earliest_task' as ProjectSortKey,
+    sortDir: 'asc' as SortDir,
+    dateBasis: PROJECT_DATE_BASIS_ALL,
     completedOpen: false,
     cancelledOpen: false,
   });
-  const { statusFilter, sortBy, completedOpen, cancelledOpen } = listPrefs;
+  const { statusFilter, sortBy, sortDir, completedOpen, cancelledOpen } = listPrefs;
+  const { taskTypes } = useCatalogOptions();
+  const dateBasis = resolveProjectDateBasis(listPrefs.dateBasis, taskTypes);
+  const dateBasisChoices = projectDateBasisChoices(taskTypes);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Project | null>(null);
   const [saving, setSaving] = useState(false);
@@ -110,20 +120,32 @@ export function ProjectsPage() {
   }, [fetchProjects, fetchClients]);
 
   useEffect(() => {
-    if (projects.length === 0) return;
-    (async () => {
-      const dates: Record<string, string | null> = {};
+    let cancelled = false;
+    const load = async () => {
+      if (projects.length === 0) {
+        setProjectEarliestDates({});
+        return;
+      }
       const tasks = await listTasks();
+      if (cancelled) return;
+      const dates: Record<string, string | null> = {};
       for (const project of projects) {
-        const earliest = tasks
-          .filter((task) => task.project_id === project.id && task.start_date)
-          .map((task) => task.start_date as string)
-          .sort()[0];
-        dates[project.id] = earliest || null;
+        dates[project.id] = earliestDateForProject(
+          tasks.filter((task) => task.project_id === project.id),
+          dateBasis
+        );
       }
       setProjectEarliestDates(dates);
-    })().catch((error) => console.error('Error fetching project dates:', error));
-  }, [projects]);
+    };
+    load().catch((error) => console.error('Error fetching project dates:', error));
+    const unsubscribe = subscribeData(() => {
+      load().catch((error) => console.error('Error fetching project dates:', error));
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [projects, dateBasis]);
 
   const openCreate = () => {
     setEditing(null);
@@ -222,18 +244,21 @@ export function ProjectsPage() {
   });
 
   const sorted = [...filtered].sort((a, b) => {
-    if (sortBy === 'created_at') return compareCreatedAt(a, b);
     if (sortBy === 'earliest_task') {
-      const dateA = projectEarliestDates[a.id] || '9999-12-31';
-      const dateB = projectEarliestDates[b.id] || '9999-12-31';
-      return dateA.localeCompare(dateB);
+      const dateA = projectEarliestDates[a.id] || '';
+      const dateB = projectEarliestDates[b.id] || '';
+      if (!dateA && !dateB) return 0;
+      if (!dateA) return 1;
+      if (!dateB) return -1;
+      return applySortDir(dateA.localeCompare(dateB), sortDir);
     }
+    if (sortBy === 'created_at') return applySortDir(compareCreatedAt(a, b), sortDir);
     if (sortBy === 'client_name') {
       const nameA = (clientName(a.client) || 'zzz').toLowerCase();
       const nameB = (clientName(b.client) || 'zzz').toLowerCase();
-      return nameA.localeCompare(nameB);
+      return applySortDir(nameA.localeCompare(nameB), sortDir);
     }
-    return a.project_name.localeCompare(b.project_name, 'ja');
+    return applySortDir(a.project_name.localeCompare(b.project_name, 'ja'), sortDir);
   });
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || null;
@@ -282,28 +307,33 @@ export function ProjectsPage() {
         </div>
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <ArrowUpDown className="h-4 w-4 text-slate-400" />
-        <span className="text-sm text-slate-500">並び替え:</span>
-        {([
-          { key: 'created_at', label: '登録順' },
-          { key: 'earliest_task', label: '日付' },
-          { key: 'project_name', label: 'プロジェクト名' },
-          { key: 'client_name', label: 'クライアント名' },
-        ] as { key: ProjectSortKey; label: string }[]).map((s) => (
-          <button
-            key={s.key}
-            onClick={() => patchListPrefs({ sortBy: s.key })}
-            className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-all ${
-              sortBy === s.key
-                ? 'bg-teal-100 text-teal-700 border border-teal-200'
-                : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-50'
-            }`}
+      <SortBar
+        options={[
+          { key: 'earliest_task' as const, label: '日付' },
+          { key: 'created_at' as const, label: '登録順' },
+          { key: 'project_name' as const, label: 'プロジェクト名' },
+          { key: 'client_name' as const, label: 'クライアント名' },
+        ]}
+        sortBy={sortBy}
+        sortDir={sortDir}
+        onChange={patchListPrefs}
+      />
+      {sortBy === 'earliest_task' ? (
+        <div className="mb-4 flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
+          <span className="shrink-0 text-xs font-medium text-slate-400">日付の基準</span>
+          <select
+            value={dateBasis}
+            onChange={(e) => patchListPrefs({ dateBasis: e.target.value })}
+            className={`${inputClass} w-full sm:w-auto`}
           >
-            {s.label}
-          </button>
-        ))}
-      </div>
+            {dateBasisChoices.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
 
       <SplitDetailLayout
         selected={Boolean(selectedProject)}
@@ -552,8 +582,14 @@ interface TaskPaneProps {
   onClose: () => void;
 }
 
+type SchedulePaneSortKey = 'date' | 'created_at';
+
 function TaskPane({ project, onClose }: TaskPaneProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [panePrefs, patchPanePrefs] = useSessionPref('schedule_pane', {
+    sortBy: 'date' as SchedulePaneSortKey,
+    sortDir: 'asc' as SortDir,
+  });
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
@@ -584,11 +620,7 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
     setLoading(true);
     try {
       const data = await listTasks();
-      setTasks(
-        data
-          .filter((task) => task.project_id === project.id)
-          .sort(compareCreatedAt)
-      );
+      setTasks(data.filter((task) => task.project_id === project.id));
     } catch (error) {
       console.error('Error fetching tasks:', error);
     }
@@ -605,11 +637,7 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
     return subscribeData(() => {
       listTasks()
         .then((data) => {
-          setTasks(
-            data
-              .filter((task) => task.project_id === project.id)
-              .sort(compareCreatedAt)
-          );
+          setTasks(data.filter((task) => task.project_id === project.id));
         })
         .catch((error) => console.error('Error fetching tasks:', error));
     });
@@ -753,6 +781,11 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
     fetchTasks();
   };
 
+  const sortedTasks = [...tasks].sort((a, b) => {
+    const result = panePrefs.sortBy === 'created_at' ? compareCreatedAt(a, b) : compareTaskDate(a, b);
+    return applySortDir(result, panePrefs.sortDir);
+  });
+
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
@@ -771,6 +804,17 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
         </button>
       </div>
 
+      <SortBar
+        className="mb-3"
+        options={[
+          { key: 'date' as const, label: '日付' },
+          { key: 'created_at' as const, label: '登録順' },
+        ]}
+        sortBy={panePrefs.sortBy}
+        sortDir={panePrefs.sortDir}
+        onChange={patchPanePrefs}
+      />
+
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-300 border-t-teal-600" />
@@ -784,7 +828,7 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
         </div>
       ) : (
         <div className="space-y-2.5">
-          {tasks.map((task) => (
+          {sortedTasks.map((task) => (
             <div
               key={task.id}
               className={`card group p-3 transition-all hover:shadow-md ${cancelledCardClass(task.is_cancelled)}`}

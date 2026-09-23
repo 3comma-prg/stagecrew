@@ -40,6 +40,7 @@ export const SHEETS: SheetSpec[] = [
       { key: 'non_billable_task_types', header: '請求しない種別', type: 'string', fallback: '', aliases: ['非請求種別'] },
       { key: 'billing_timing', header: '請求タイミング', type: 'string', fallback: 'schedule_month', aliases: ['請求のタイミング'] },
       { key: 'show_group_gap_days', header: '本番まとめ間隔（日）', type: 'number', fallback: 14, aliases: ['本番グループ間隔'] },
+      { key: 'sort_order', header: '並び順', type: 'number', fallback: null },
       createdAt,
     ],
   },

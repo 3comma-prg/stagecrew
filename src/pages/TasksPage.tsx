@@ -8,6 +8,7 @@ import {
   billingFromInvoiceStatus,
   clientName,
   compareCreatedAt,
+  compareTaskDate,
   DEFAULT_TASK_TYPE,
   formatTaskDateRange,
   monthBillingLabel,
@@ -28,6 +29,7 @@ import { CollapsedSection, isClosedProjectStatus } from '@/components/CollapsedS
 import { errorFor, inputErrorClass, validateScheduleForm, type FieldError } from '@/lib/schedule-form';
 import { parseInvoiceTaskIds } from '@/lib/invoice-line-merge';
 import { useSessionPref } from '@/lib/session-list-prefs';
+import { SortBar, applySortDir, type SortDir } from '@/components/ui/SortBar';
 import { useCatalogOptions } from '@/lib/catalog-options';
 import {
   defaultsFromClient,
@@ -45,7 +47,6 @@ import {
   Globe,
   Ban,
   Search,
-  ArrowUpDown,
   Copy,
   X,
   Building2,
@@ -104,10 +105,11 @@ export function TasksPage() {
     billingFilter: 'all' as BillingStatus | 'all',
     projectFilter: 'all',
     sortBy: 'date' as TaskSortKey,
+    sortDir: 'asc' as SortDir,
     completedOpen: false,
     cancelledOpen: false,
   });
-  const { billingFilter, projectFilter, sortBy, completedOpen, cancelledOpen } = listPrefs;
+  const { billingFilter, projectFilter, sortBy, sortDir, completedOpen, cancelledOpen } = listPrefs;
   const { taskTypes } = useCatalogOptions();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
@@ -360,30 +362,25 @@ export function TasksPage() {
   });
 
   const sorted = [...filtered].sort((a, b) => {
-    if (sortBy === 'created_at') return compareCreatedAt(a, b);
-    if (sortBy === 'date') {
-      const aDate = `${a.start_date || a.date || ''} ${a.start_time || ''}`;
-      const bDate = `${b.start_date || b.date || ''} ${b.start_time || ''}`;
-      return aDate.localeCompare(bDate);
-    }
-    if (sortBy === 'project') {
-      return (a.project?.project_name || '').localeCompare(b.project?.project_name || '', 'ja');
-    }
-    if (sortBy === 'client_name') {
+    let result = 0;
+    if (sortBy === 'created_at') result = compareCreatedAt(a, b);
+    else if (sortBy === 'date') result = compareTaskDate(a, b);
+    else if (sortBy === 'project') {
+      result = (a.project?.project_name || '').localeCompare(b.project?.project_name || '', 'ja');
+    } else if (sortBy === 'client_name') {
       const nameA = clientName(a.project?.client) || 'zzz';
       const nameB = clientName(b.project?.client) || 'zzz';
-      return nameA.localeCompare(nameB, 'ja');
+      result = nameA.localeCompare(nameB, 'ja');
+    } else if (sortBy === 'task_type') {
+      result = compareCatalogOrder(a.task_type, b.task_type, taskTypes);
+    } else if (sortBy === 'location') {
+      result = (a.location || '').localeCompare(b.location || '', 'ja');
+    } else if (sortBy === 'position') {
+      result = (a.position || '').localeCompare(b.position || '', 'ja');
+    } else {
+      result = a.billing_status.localeCompare(b.billing_status);
     }
-    if (sortBy === 'task_type') {
-      return compareCatalogOrder(a.task_type, b.task_type, taskTypes);
-    }
-    if (sortBy === 'location') {
-      return (a.location || '').localeCompare(b.location || '', 'ja');
-    }
-    if (sortBy === 'position') {
-      return (a.position || '').localeCompare(b.position || '', 'ja');
-    }
-    return a.billing_status.localeCompare(b.billing_status);
+    return applySortDir(result, sortDir);
   });
 
   const selectedTask = tasks.find((t) => t.id === selectedTaskId) || null;
@@ -451,32 +448,21 @@ export function TasksPage() {
         </div>
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <ArrowUpDown className="h-4 w-4 text-slate-400" />
-        <span className="text-sm text-slate-500">並び替え:</span>
-        {([
-          { key: 'created_at', label: '登録順' },
-          { key: 'date', label: '日付' },
-          { key: 'project', label: 'プロジェクト名' },
-          { key: 'client_name', label: 'クライアント名' },
-          { key: 'task_type', label: '種別' },
-          { key: 'location', label: '会場' },
-          { key: 'position', label: 'ポジション' },
-          { key: 'billing_status', label: '請求状態' },
-        ] as { key: TaskSortKey; label: string }[]).map((s) => (
-          <button
-            key={s.key}
-            onClick={() => patchListPrefs({ sortBy: s.key })}
-            className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-all ${
-              sortBy === s.key
-                ? 'bg-teal-100 text-teal-700 border border-teal-200'
-                : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-50'
-            }`}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
+      <SortBar
+        options={[
+          { key: 'date' as const, label: '日付' },
+          { key: 'created_at' as const, label: '登録順' },
+          { key: 'project' as const, label: 'プロジェクト名' },
+          { key: 'client_name' as const, label: 'クライアント名' },
+          { key: 'task_type' as const, label: '種別' },
+          { key: 'location' as const, label: '会場' },
+          { key: 'position' as const, label: 'ポジション' },
+          { key: 'billing_status' as const, label: '請求状態' },
+        ]}
+        sortBy={sortBy}
+        sortDir={sortDir}
+        onChange={patchListPrefs}
+      />
 
       <SplitDetailLayout
         selected={Boolean(selectedTask)}
@@ -714,6 +700,8 @@ interface SameProjectSchedulePaneProps {
   onDelete: (id: string) => void;
 }
 
+type SchedulePaneSortKey = 'date' | 'created_at';
+
 function SameProjectSchedulePane({
   task,
   project,
@@ -726,16 +714,16 @@ function SameProjectSchedulePane({
 }: SameProjectSchedulePaneProps) {
   const [schedules, setSchedules] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  const [panePrefs, patchPanePrefs] = useSessionPref('schedule_pane', {
+    sortBy: 'date' as SchedulePaneSortKey,
+    sortDir: 'asc' as SortDir,
+  });
 
   const fetchSchedules = useCallback(async () => {
     setLoading(true);
     try {
       const data = await listTasks();
-      setSchedules(
-        data
-          .filter((item) => item.project_id === project.id)
-          .sort(compareCreatedAt)
-      );
+      setSchedules(data.filter((item) => item.project_id === project.id));
     } catch (error) {
       console.error('Error fetching schedules:', error);
     }
@@ -745,6 +733,11 @@ function SameProjectSchedulePane({
   useEffect(() => {
     fetchSchedules();
   }, [fetchSchedules]);
+
+  const sortedSchedules = [...schedules].sort((a, b) => {
+    const result = panePrefs.sortBy === 'created_at' ? compareCreatedAt(a, b) : compareTaskDate(a, b);
+    return applySortDir(result, panePrefs.sortDir);
+  });
 
   return (
     <div>
@@ -760,6 +753,17 @@ function SameProjectSchedulePane({
         </div>
       </div>
 
+      <SortBar
+        className="mb-3"
+        options={[
+          { key: 'date' as const, label: '日付' },
+          { key: 'created_at' as const, label: '登録順' },
+        ]}
+        sortBy={panePrefs.sortBy}
+        sortDir={panePrefs.sortDir}
+        onChange={patchPanePrefs}
+      />
+
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-300 border-t-teal-600" />
@@ -773,7 +777,7 @@ function SameProjectSchedulePane({
         </div>
       ) : (
         <div className="space-y-2.5">
-          {schedules.map((s) => (
+          {sortedSchedules.map((s) => (
             <div
               key={s.id}
               className={`card group cursor-pointer p-3 transition-all hover:shadow-md ${

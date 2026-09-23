@@ -222,7 +222,7 @@ function projectMap(projects: Project[], clients: Client[]) {
 
 export async function listClients() {
   const data = await ensure();
-  return [...data.clients].sort(compareCreatedAt);
+  return [...data.clients].sort(compareUnitPriceOrder);
 }
 
 export async function listProjects() {
@@ -274,11 +274,41 @@ async function deleteRow(key: SheetKey, id: string) {
 }
 
 export async function saveClient(payload: Record<string, unknown>, id?: string) {
+  let body = payload;
+  if (!id && payload.sort_order == null) {
+    const current = (await ensure()).clients;
+    const max = current.reduce((highest, item) => Math.max(highest, item.sort_order ?? -1), -1);
+    body = { ...payload, sort_order: max + 1 };
+  }
   const saved = id
-    ? await updateRow<Client>('clients', id, payload)
-    : await createRow<Client>('clients', payload);
+    ? await updateRow<Client>('clients', id, body)
+    : await createRow<Client>('clients', body);
   await refresh(['clients']);
   return saved;
+}
+
+export async function reorderClients(ids: string[]) {
+  await request('/api/sheets/clients/reorder', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  });
+  const current = raw;
+  if (!current) {
+    await refresh(['clients']);
+    return;
+  }
+  const byId = new Map(current.clients.map((item) => [item.id, item]));
+  const seen = new Set(ids);
+  const ordered: Client[] = [];
+  ids.forEach((id, index) => {
+    const item = byId.get(id);
+    if (item) ordered.push({ ...item, sort_order: index });
+  });
+  const rest = current.clients
+    .filter((item) => !seen.has(item.id))
+    .map((item, index) => ({ ...item, sort_order: ordered.length + index }));
+  raw = { ...current, clients: [...ordered, ...rest] };
+  notifyData();
 }
 
 export async function deleteClient(id: string) {
