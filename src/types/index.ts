@@ -44,8 +44,8 @@ export function compareTaskDate(
 export const DEFAULT_APP_NAME = 'Stagecrew';
 export const DEFAULT_APP_TAGLINE = '業務管理';
 export const DEFAULT_APP_FOOTER = 'スケジュール・請求書管理システム';
-/** 画面表示。Docker タグは alpha_3.5.0（タグに α は使えない）。 */
-export const APP_VERSION_LABEL = 'ver α_3.5.0';
+/** 画面表示。Docker タグは alpha_3.5.1（タグに α は使えない）。 */
+export const APP_VERSION_LABEL = 'ver α_3.5.1';
 
 export interface GoogleIntegrationSettings {
   id: number;
