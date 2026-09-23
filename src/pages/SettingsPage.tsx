@@ -1,13 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { hydrateSettings, saveSettings } from '@/lib/local-store';
 import { checkGoogleCalendar, resolveCalendarId } from '@/lib/calendar-sync';
-import { initializeDataSpreadsheet, preloadSheets, resetSheetsCache } from '@/lib/db';
+import { initializeDataSpreadsheet, exportToSpreadsheet, importFromSpreadsheet, preloadSheets, resetSheetsCache } from '@/lib/db';
 import { DEFAULT_APP_FOOTER, DEFAULT_APP_NAME, DEFAULT_APP_TAGLINE, spreadsheetIdFromInput, spreadsheetUrlFromId } from '@/types';
 import { FormField, inputClass } from '@/components/ui/FormField';
 import { OptionOrderList } from '@/components/ui/OptionOrderList';
 import { useCatalogOptions } from '@/lib/catalog-options';
 import type { PageKey } from '@/components/Layout';
-import { ArrowUpDown, Calendar, FileText, Link2, Mail, Save, Check, Lightbulb, Plus, Table2 } from 'lucide-react';
+import { ArrowUpDown, Calendar, Download, FileText, Link2, Mail, Save, Check, Lightbulb, Plus, Table2, Upload } from 'lucide-react';
 
 export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => void }) {
   const { taskTypes, reorderTaskTypes } = useCatalogOptions();
@@ -23,6 +23,7 @@ export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
   } | null>(null);
   const [checkingCalendar, setCheckingCalendar] = useState(false);
   const [creatingSheet, setCreatingSheet] = useState(false);
+  const [transferring, setTransferring] = useState<'import' | 'export' | null>(null);
   const [sheetMessage, setSheetMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
   const [form, setForm] = useState({
@@ -133,7 +134,7 @@ export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
     preloadSheets().catch((error: unknown) => {
       setSheetMessage({
         ok: false,
-        text: error instanceof Error ? error.message : 'スプレッドシートの読み込みに失敗しました。',
+        text: error instanceof Error ? error.message : 'データの読み込みに失敗しました。',
       });
     });
     if (calendarId && calendarId !== form.google_calendar_id) {
@@ -149,13 +150,13 @@ export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
     if (!sheetId) {
       setSheetMessage({
         ok: false,
-        text: '先に、空のスプレッドシートのURLを上の欄に貼ってください。新規作成はファイルを増やさず、そのシートに項目名を作ります。',
+        text: '先に、空のスプレッドシートのURLを上の欄に貼ってください。シートと1行目の項目名を用意します。',
       });
       return;
     }
     if (
       !confirm(
-        'このスプレッドシートに、クライアント・プロジェクト・スケジュール・単価・請求書・請求明細のシートと項目名を作成します。すでにあるデータ行は消しません。空のファイル向けです。続けますか？'
+        'このスプレッドシートに、クライアント・プロジェクト・スケジュール・単価・請求書・請求明細のシートと項目名を作成します。すでにあるデータ行は消しません。続けますか？'
       )
     ) {
       return;
@@ -166,9 +167,7 @@ export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
     try {
       setForm((current) => ({ ...current, data_spreadsheet_url: sheetUrl }));
       await saveSettings({ data_spreadsheet_url: sheetUrl });
-      resetSheetsCache();
       const created = await initializeDataSpreadsheet();
-      await preloadSheets();
       const sheetList = created.sheets?.length ? created.sheets.join('、') : '各シート';
       setSheetMessage({ ok: true, text: `${sheetList} のシートと項目名を作成しました。` });
     } catch (error) {
@@ -178,6 +177,78 @@ export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
       });
     }
     setCreatingSheet(false);
+  };
+
+  const handleImport = async (mode: 'upsert' | 'replace_all') => {
+    const sheetId = spreadsheetIdFromInput(form.data_spreadsheet_url);
+    if (!sheetId) {
+      setSheetMessage({ ok: false, text: 'インポート元のスプレッドシートURLを入力して保存してください。' });
+      return;
+    }
+    if (mode === 'replace_all') {
+      if (
+        !confirm(
+          'アプリ内の全データ（クライアント・プロジェクト・スケジュール・単価・請求書）を削除し、スプレッドシートの内容で置き換えます。この操作は取り消せません。続けますか？'
+        )
+      ) {
+        return;
+      }
+    } else if (
+      !confirm(
+        'スプレッドシートから取り込みます。同じIDのデータは上書き、新しいIDは追加されます。続けますか？'
+      )
+    ) {
+      return;
+    }
+    setTransferring('import');
+    setSheetMessage(null);
+    try {
+      const sheetUrl = spreadsheetUrlFromId(sheetId);
+      await saveSettings({ data_spreadsheet_url: sheetUrl });
+      const result = await importFromSpreadsheet({ spreadsheetUrl: sheetUrl, mode });
+      const warningText =
+        result.warnings && result.warnings.length
+          ? `\n注意: ${result.warnings.slice(0, 5).join(' / ')}${result.warnings.length > 5 ? ' …' : ''}`
+          : '';
+      setSheetMessage({
+        ok: true,
+        text: `インポート完了（追加 ${result.inserted ?? 0} / 更新 ${result.updated ?? 0}）${warningText}`,
+      });
+    } catch (error) {
+      setSheetMessage({
+        ok: false,
+        text: error instanceof Error ? error.message : 'インポートに失敗しました。',
+      });
+    }
+    setTransferring(null);
+  };
+
+  const handleExport = async () => {
+    const sheetId = spreadsheetIdFromInput(form.data_spreadsheet_url);
+    if (!sheetId) {
+      setSheetMessage({ ok: false, text: 'エクスポート先のスプレッドシートURLを入力して保存してください。' });
+      return;
+    }
+    if (!confirm('アプリのデータをスプレッドシートへ書き出します。同名シートの内容は上書きされます。続けますか？')) {
+      return;
+    }
+    setTransferring('export');
+    setSheetMessage(null);
+    try {
+      const sheetUrl = spreadsheetUrlFromId(sheetId);
+      await saveSettings({ data_spreadsheet_url: sheetUrl });
+      const result = await exportToSpreadsheet({ spreadsheetUrl: sheetUrl });
+      setSheetMessage({
+        ok: true,
+        text: `エクスポート完了（${(result.sheets || []).join('、') || '各シート'}）`,
+      });
+    } catch (error) {
+      setSheetMessage({
+        ok: false,
+        text: error instanceof Error ? error.message : 'エクスポートに失敗しました。',
+      });
+    }
+    setTransferring(null);
   };
 
   const handleCalendarCheck = async () => {
@@ -286,8 +357,10 @@ export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
               <Table2 className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="font-semibold text-slate-900">データ用スプレッドシート</h2>
-              <p className="text-xs text-slate-500">プロジェクト・スケジュール・クライアント・単価・請求書の保存先です</p>
+              <h2 className="font-semibold text-slate-900">Googleスプレッドシート連携</h2>
+              <p className="text-xs text-slate-500">
+                インポート／エクスポートと請求PDFの作業用です。アプリ本体のデータはサーバー内のデータベースに保存されます
+              </p>
             </div>
           </div>
           <div className="space-y-4">
@@ -311,16 +384,40 @@ export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
                 />
               </div>
               <p className="mt-2 text-xs text-slate-500">
-                Googleで空のスプレッドシートを用意し、上のサービスアカウントに「編集者」で共有してからURLを貼ってください。空欄のときは .env の GOOGLE_SPREADSHEET_ID を使います。新規作成はファイルを増やさず、シートと1行目の項目名を作ります。
+                空欄のときは .env の GOOGLE_SPREADSHEET_ID を使います。「シート準備」はファイルを増やさず、タブと1行目の項目名を作ります。インポートは同じIDを上書きし、新しい行は追加します。
               </p>
             </FormField>
             <div className="flex flex-wrap items-center gap-3">
-              <button type="button" onClick={handleCreateSheet} disabled={creatingSheet} className="btn-secondary">
+              <button type="button" onClick={handleCreateSheet} disabled={creatingSheet || Boolean(transferring)} className="btn-secondary">
                 <Plus className="h-4 w-4" />
-                {creatingSheet ? '作成中...' : '新規作成'}
+                {creatingSheet ? '準備中...' : 'シート準備'}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleImport('upsert')}
+                disabled={Boolean(transferring) || creatingSheet}
+                className="btn-secondary"
+              >
+                <Upload className="h-4 w-4" />
+                {transferring === 'import' ? '取込中...' : 'インポート'}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleImport('replace_all')}
+                disabled={Boolean(transferring) || creatingSheet}
+                className="btn-secondary"
+              >
+                <Upload className="h-4 w-4" />
+                全置換インポート
+              </button>
+              <button type="button" onClick={handleExport} disabled={Boolean(transferring) || creatingSheet} className="btn-secondary">
+                <Download className="h-4 w-4" />
+                {transferring === 'export' ? '書出中...' : 'エクスポート'}
               </button>
               {sheetMessage && (
-                <p className={`w-full text-sm ${sheetMessage.ok ? 'text-emerald-700' : 'text-red-700'}`}>{sheetMessage.text}</p>
+                <p className={`w-full whitespace-pre-wrap text-sm ${sheetMessage.ok ? 'text-emerald-700' : 'text-red-700'}`}>
+                  {sheetMessage.text}
+                </p>
               )}
             </div>
           </div>

@@ -4,17 +4,35 @@ import { JWT } from 'google-auth-library';
 import { recoverInvoicePdfSheets, renderInvoicePdf, saveInvoicePdfToDrive, findDriveFileInFolder, type InvoicePdfRequest } from './invoice-pdf';
 import { createInvoiceGmailDraft, MISSING_GMAIL_SENDER_MESSAGE, type InvoiceGmailDraftInput } from './gmail-draft';
 import { inspectCalendar, pullCalendarChanges, pushTaskToCalendar } from './calendar';
-import { SHEETS, SHEET_BY_KEY, labelFor, valueFor, type Column, type SheetKey, type SheetSpec } from './schema';
+import { SHEETS, type SheetKey } from './schema';
 import { readAppSettings, writeAppSettings } from './app-settings';
+import {
+  createRow,
+  databasePath,
+  databaseReady,
+  deleteRow,
+  listRows,
+  openDatabase,
+  reorderUnitPrices,
+  replaceAllRows,
+  replaceInvoiceItems,
+  updateRow,
+  upsertRows,
+  validateForeignKeys,
+  type UpsertSummary,
+} from './db';
+import { prepareWorkspaceSheets, readSheetRows, writeSheetRows } from './google-sheets-io';
+import type { Row } from './sheet-values';
 
 type Env = Record<string, string>;
-type Row = Record<string, string | number | boolean | null> & { cells?: unknown[] };
 
 const SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
   'https://www.googleapis.com/auth/drive',
   'https://www.googleapis.com/auth/calendar',
 ];
+
+const IMPORT_ORDER: SheetKey[] = ['clients', 'projects', 'tasks', 'unit_prices', 'invoices', 'invoice_items'];
 
 function parseSpreadsheetId(raw: string) {
   const value = raw.trim();
@@ -44,110 +62,10 @@ function serviceAccount(env: Env) {
 
   if (!email || !privateKey) {
     throw new Error(
-      'Googleスプレッドシートに接続できません。.env にサービスアカウント（GOOGLE_SERVICE_ACCOUNT_JSON、または GOOGLE_SERVICE_ACCOUNT_EMAIL と GOOGLE_PRIVATE_KEY）を設定してください。'
+      'Google APIに接続できません。.env にサービスアカウント（GOOGLE_SERVICE_ACCOUNT_JSON、または GOOGLE_SERVICE_ACCOUNT_EMAIL と GOOGLE_PRIVATE_KEY）を設定してください。'
     );
   }
   return { email, privateKey };
-}
-
-function credentials(env: Env, overrideId?: string) {
-  const sa = serviceAccount(env);
-  const spreadsheetId = parseSpreadsheetId(overrideId || '') || env.GOOGLE_SPREADSHEET_ID?.trim() || '';
-  if (!spreadsheetId) {
-    throw new Error(
-      'データ用スプレッドシートのURLがありません。設定に空のスプレッドシートのURLを貼ってから、新規作成してください。'
-    );
-  }
-  return { ...sa, spreadsheetId };
-}
-
-function quoteTitle(title: string) {
-  return `'${title.replace(/'/g, "''")}'`;
-}
-
-function a1Column(index: number) {
-  let n = index + 1;
-  let label = '';
-  while (n > 0) {
-    const rem = (n - 1) % 26;
-    label = String.fromCharCode(65 + rem) + label;
-    n = Math.floor((n - 1) / 26);
-  }
-  return label;
-}
-
-function parseBoolean(value: unknown, fallback: boolean) {
-  if (value == null || value === '') return fallback;
-  const text = String(value).trim().toLowerCase();
-  if (['true', '1', 'yes', 'はい', 'y'].includes(text)) return true;
-  if (['false', '0', 'no', 'いいえ', 'n'].includes(text)) return false;
-  return fallback;
-}
-
-function parseDomestic(value: unknown, fallback: boolean) {
-  if (value == null || value === '') return fallback;
-  const text = String(value).trim().toLowerCase();
-  if (['国内', 'true', '1', 'yes', 'はい'].includes(text)) return true;
-  if (['海外', 'false', '0', 'no', 'いいえ'].includes(text)) return false;
-  return fallback;
-}
-
-function serialToDate(serial: number) {
-  const utc = Date.UTC(1899, 11, 30) + Math.round(serial) * 86400000;
-  return new Date(utc).toISOString().slice(0, 10);
-}
-
-function serialToTime(serial: number) {
-  const minutes = Math.round((serial % 1) * 24 * 60);
-  const hours = Math.floor(minutes / 60) % 24;
-  const mins = minutes % 60;
-  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
-}
-
-function parseDate(value: unknown): string | null {
-  if (value == null || value === '') return null;
-  if (typeof value === 'number') return serialToDate(value);
-  const text = String(value).trim();
-  const iso = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (iso) return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}`;
-  return text || null;
-}
-
-function parseTime(value: unknown): string | null {
-  if (value == null || value === '') return null;
-  if (typeof value === 'number') return serialToTime(value);
-  const text = String(value).trim();
-  const match = text.match(/^(\d{1,2}):(\d{2})/);
-  if (!match) return text || null;
-  return `${match[1].padStart(2, '0')}:${match[2]}`;
-}
-
-function parseNumber(value: unknown, fallback: number | null) {
-  if (value == null || value === '') return fallback;
-  const number = typeof value === 'number' ? value : Number(String(value).replace(/,/g, ''));
-  return Number.isFinite(number) ? number : fallback;
-}
-
-function parseCell(column: Column, value: unknown) {
-  if (column.type === 'boolean') return parseBoolean(value, Boolean(column.fallback));
-  if (column.type === 'domestic') return parseDomestic(value, column.fallback !== false);
-  if (column.type === 'number') return parseNumber(value, (column.fallback as number | null) ?? null);
-  if (column.type === 'date') return parseDate(value);
-  if (column.type === 'time') return parseTime(value);
-  if (value == null || value === '') return column.fallback === undefined ? null : column.fallback;
-  const text = String(value).trim();
-  return valueFor(column.key, text) || (column.fallback ?? null);
-}
-
-function formatCell(column: Column, value: unknown) {
-  if (value == null || value === '') return '';
-  if (column.type === 'boolean') return value ? 'はい' : 'いいえ';
-  if (column.type === 'domestic') return value ? '国内' : '海外';
-  if (column.type === 'number') return value;
-  if (column.key === 'status' || column.key === 'time_type' || column.key === 'billing_status' || column.key === 'tax_type') {
-    return labelFor(column.key, value);
-  }
-  return String(value);
 }
 
 function readBody(req: IncomingMessage) {
@@ -168,30 +86,16 @@ function send(res: ServerResponse, status: number, body: unknown) {
 
 export function createSheetsApi(env: Env) {
   let auth: JWT | null = null;
-  let spreadsheetId = '';
-  let queue = Promise.resolve();
-  const sheetIds = new Map<string, number>();
-
-  const locked = <T>(fn: () => Promise<T>, overrideId?: string) => {
-    const start = async () => {
-      await connect(overrideId);
-      await recoverInvoicePdfSheets({
-        getToken: token,
-        destinationSpreadsheetId: spreadsheetId,
-        serviceAccountEmail: accountEmail,
-      });
-      return fn();
-    };
-    const run = queue.then(start, start);
-    queue = run.then(
-      () => undefined,
-      () => undefined
-    );
-    return run;
-  };
-
   let accountEmail = '';
   let authScopeKey = '';
+  let googleQueue = Promise.resolve();
+  let dbBoot: Promise<void> | null = null;
+
+  const ensureDb = async () => {
+    if (!dbBoot) dbBoot = openDatabase(env).then(() => undefined);
+    await dbBoot;
+  };
+
   const connectAuth = async () => {
     const sa = serviceAccount(env);
     accountEmail = sa.email;
@@ -201,21 +105,8 @@ export function createSheetsApi(env: Env) {
     auth = new JWT({ email: sa.email, key: sa.privateKey, scopes: SCOPES });
   };
 
-  const connect = async (overrideId?: string) => {
-    const creds = credentials(env, overrideId);
-    if (spreadsheetId !== creds.spreadsheetId) {
-      spreadsheetId = creds.spreadsheetId;
-      sheetIds.clear();
-    } else {
-      spreadsheetId = creds.spreadsheetId;
-    }
-    accountEmail = creds.email;
-    await connectAuth();
-  };
-
   const token = async () => {
     await connectAuth();
-    // Force a fresh access token so Drive write scope is included after server reloads.
     const access = await auth!.getAccessToken();
     if (!access.token) {
       await auth!.authorize();
@@ -226,349 +117,90 @@ export function createSheetsApi(env: Env) {
     return access.token;
   };
 
-  const sheetsFetch = async (path: string, init: RequestInit = {}) => {
-    const access = await token();
-    const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${access}`,
-        'Content-Type': 'application/json',
-        ...(init.headers || {}),
-      },
-    });
-    if (!response.ok) {
-      const detail = await response.text();
-      if (response.status === 403 || response.status === 404) {
-        throw new Error(
-          'スプレッドシートを開けません。IDを確認し、サービスアカウントのメールアドレスに編集者権限を共有してください。'
-        );
-      }
-      throw new Error(`Google Sheets API error (${response.status}): ${detail.slice(0, 300)}`);
+  const workspaceSpreadsheetId = (overrideId?: string) => {
+    const stored = parseSpreadsheetId(readAppSettings(env).settings.data_spreadsheet_url || '');
+    const id = parseSpreadsheetId(overrideId || '') || stored || env.GOOGLE_SPREADSHEET_ID?.trim() || '';
+    if (!id) {
+      throw new Error(
+        '作業用スプレッドシートのURLがありません。設定にスプレッドシートのURLを貼って保存してください。'
+      );
     }
-    if (response.status === 204) return null;
-    return response.json();
+    return id;
   };
 
-  const loadSheetIds = async () => {
-    const meta = (await sheetsFetch('?fields=sheets.properties')) as {
-      sheets?: { properties: { sheetId: number; title: string } }[];
+  const withGoogle = <T>(fn: () => Promise<T>) => {
+    const start = async () => {
+      await connectAuth();
+      return fn();
     };
-    sheetIds.clear();
-    for (const sheet of meta.sheets || []) {
-      sheetIds.set(sheet.properties.title, sheet.properties.sheetId);
-    }
+    const run = googleQueue.then(start, start);
+    googleQueue = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
   };
 
-  const ensureSheet = async (spec: SheetSpec) => {
-    if (sheetIds.size === 0) await loadSheetIds();
-    if (sheetIds.has(spec.title)) return;
-    await sheetsFetch(':batchUpdate', {
-      method: 'POST',
-      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: spec.title } } }] }),
+  const withPdfWorkspace = <T>(overrideId: string | undefined, fn: (spreadsheetId: string) => Promise<T>) =>
+    withGoogle(async () => {
+      const spreadsheetId = workspaceSpreadsheetId(overrideId);
+      await recoverInvoicePdfSheets({
+        getToken: token,
+        destinationSpreadsheetId: spreadsheetId,
+        serviceAccountEmail: accountEmail,
+      });
+      return fn(spreadsheetId);
     });
-    await loadSheetIds();
-    const sheetId = sheetIds.get(spec.title);
-    if (sheetId == null) return;
-    await sheetsFetch(':batchUpdate', {
-      method: 'POST',
-      body: JSON.stringify({
-        requests: [
-          {
-            repeatCell: {
-              range: { sheetId, startRowIndex: 1, endRowIndex: 2000, startColumnIndex: 0, endColumnIndex: spec.columns.length },
-              cell: { userEnteredFormat: { numberFormat: { type: 'TEXT' } } },
-              fields: 'userEnteredFormat.numberFormat',
-            },
-          },
-          {
-            updateSheetProperties: {
-              properties: { sheetId, gridProperties: { frozenRowCount: 1 } },
-              fields: 'gridProperties.frozenRowCount',
-            },
-          },
-        ],
-      }),
-    });
-  };
-
-  const readGrid = async (spec: SheetSpec) => {
-    await ensureSheet(spec);
-    const range = encodeURIComponent(`${quoteTitle(spec.title)}!A:ZZ`);
-    const data = (await sheetsFetch(`/values/${range}?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING`)) as {
-      values?: unknown[][];
-    };
-    const values = data.values || [];
-    const headers = (values[0] || []).map((cell) => String(cell || '').trim());
-    const columnByName = new Map<string, Column>();
-    for (const column of spec.columns) {
-      for (const name of [column.header, column.key, ...(column.aliases || [])]) {
-        if (!columnByName.has(name)) columnByName.set(name, column);
-      }
-    }
-    const mapHeaders = (names: string[]) => {
-      const used = new Set<string>();
-      return names.map((header) => {
-        const column = columnByName.get(header);
-        if (!column || used.has(column.key)) return null;
-        used.add(column.key);
-        return column;
-      });
-    };
-    let sheetHeaders = headers;
-    let indexes = mapHeaders(headers);
-    if (headers.length === 0 || indexes.every((column) => !column)) {
-      const nextHeaders = spec.columns.map((column) => column.header);
-      await sheetsFetch(`/values/${encodeURIComponent(`${quoteTitle(spec.title)}!A1`)}?valueInputOption=RAW`, {
-        method: 'PUT',
-        body: JSON.stringify({ values: [nextHeaders] }),
-      });
-      return { headers: nextHeaders, columns: spec.columns, rows: [] as Row[], sheetRowNumbers: [] as number[] };
-    }
-
-    const missing = spec.columns.filter((column) => !indexes.some((current) => current?.key === column.key));
-    if (missing.length > 0) {
-      sheetHeaders = [...headers, ...missing.map((column) => column.header)];
-      indexes = mapHeaders(sheetHeaders);
-    }
-    const canonical = indexes.map((column, index) => (column ? column.header : sheetHeaders[index] || ''));
-    if (canonical.length !== headers.length || canonical.some((header, index) => header !== headers[index])) {
-      await sheetsFetch(`/values/${encodeURIComponent(`${quoteTitle(spec.title)}!A1`)}?valueInputOption=RAW`, {
-        method: 'PUT',
-        body: JSON.stringify({ values: [canonical] }),
-      });
-    }
-
-    const rows: Row[] = [];
-    const sheetRowNumbers: number[] = [];
-    const missingIds: { rowNumber: number; row: Row }[] = [];
-    values.slice(1).forEach((cells, index) => {
-      const row: Row = {};
-      indexes.forEach((column, cellIndex) => {
-        if (!column) return;
-        row[column.key] = parseCell(column, cells[cellIndex]);
-      });
-      const hasData = spec.columns.some((column) => {
-        if (column.key === 'id' || column.key === 'created_at') return false;
-        const value = row[column.key];
-        if (value == null || value === '' || value === column.fallback) return false;
-        if (column.type === 'boolean' || column.type === 'domestic') return false;
-        return true;
-      });
-      if (!hasData && !row.id) return;
-      if (!row.id) {
-        row.id = crypto.randomUUID();
-        row.created_at = row.created_at || new Date().toISOString();
-        missingIds.push({ rowNumber: index + 2, row });
-      }
-      row.cells = cells;
-      rows.push(row);
-      sheetRowNumbers.push(index + 2);
-    });
-    for (const pending of missingIds) {
-      await writeRow(spec, pending.rowNumber, indexes, pending.row);
-    }
-    return { headers: indexes.map((column, index) => (column ? column.header : headers[index] || '')), columns: indexes, rows, sheetRowNumbers };
-  };
-
-  const rowValues = (columns: (Column | null)[], row: Row) =>
-    columns.map((column, index) => (column ? formatCell(column, row[column.key]) : row.cells?.[index] ?? ''));
-
-  const writeRow = async (spec: SheetSpec, rowNumber: number, columns: (Column | null)[], row: Row) => {
-    const range = encodeURIComponent(`${quoteTitle(spec.title)}!A${rowNumber}`);
-    await sheetsFetch(`/values/${range}?valueInputOption=RAW`, {
-      method: 'PUT',
-      body: JSON.stringify({ values: [rowValues(columns, row)] }),
-    });
-  };
-
-  const publicRow = (row: Row) => {
-    const { cells: _cells, ...rest } = row;
-    return rest;
-  };
 
   const list = async (key: SheetKey) => {
-    const spec = SHEET_BY_KEY[key];
-    if (!spec) throw new Error('不明なシートです。');
-    const grid = await readGrid(spec);
-    return grid.rows.map(publicRow);
+    await ensureDb();
+    return listRows(key);
   };
 
   const create = async (key: SheetKey, input: Row) => {
-    const spec = SHEET_BY_KEY[key];
-    const grid = await readGrid(spec);
-    const now = new Date().toISOString();
-    const row: Row = {};
-    for (const column of spec.columns) {
-      const value = input[column.key];
-      row[column.key] = value === undefined ? parseCell(column, '') : value;
-    }
-    row.id = String(input.id || crypto.randomUUID());
-    row.created_at = String(input.created_at || now);
-    const nextRow = grid.sheetRowNumbers.length ? grid.sheetRowNumbers[grid.sheetRowNumbers.length - 1] + 1 : 2;
-    const range = encodeURIComponent(`${quoteTitle(spec.title)}!A${nextRow}`);
-    await sheetsFetch(`/values/${range}?valueInputOption=RAW`, {
-      method: 'PUT',
-      body: JSON.stringify({ values: [rowValues(grid.columns.length ? grid.columns : spec.columns, row)] }),
-    });
-    return publicRow(row);
+    await ensureDb();
+    return createRow(key, input);
   };
 
   const update = async (key: SheetKey, id: string, patch: Row) => {
-    const spec = SHEET_BY_KEY[key];
-    const grid = await readGrid(spec);
-    const index = grid.rows.findIndex((row) => row.id === id);
-    if (index < 0) throw new Error('対象の行が見つかりません。');
-    const next = { ...grid.rows[index], ...patch, id, cells: grid.rows[index].cells };
-    await writeRow(spec, grid.sheetRowNumbers[index], grid.columns, next);
-    return publicRow(next);
-  };
-
-  const reorder = async (key: SheetKey, ids: string[]) => {
-    const spec = SHEET_BY_KEY[key];
-    const grid = await readGrid(spec);
-    const columnIndex = grid.columns.findIndex((column) => column?.key === 'sort_order');
-    if (columnIndex < 0) throw new Error('並び順の列がありません。');
-    const orderById = new Map(ids.map((id, index) => [id, index]));
-    const data = grid.rows.flatMap((row, index) => {
-      const id = String(row.id || '');
-      if (!orderById.has(id)) return [];
-      const column = grid.columns[columnIndex];
-      const order = orderById.get(id) as number;
-      return [
-        {
-          range: `${quoteTitle(spec.title)}!${a1Column(columnIndex)}${grid.sheetRowNumbers[index]}`,
-          values: [[column ? formatCell(column, order) : order]],
-        },
-      ];
-    });
-    if (data.length) {
-      await sheetsFetch('/values:batchUpdate', {
-        method: 'POST',
-        body: JSON.stringify({ valueInputOption: 'RAW', data }),
-      });
-    }
-    return { ok: true as const };
-  };
-
-  const removeRows = async (spec: SheetSpec, rowNumbers: number[]) => {
-    const sheetId = sheetIds.get(spec.title);
-    if (sheetId == null || rowNumbers.length === 0) return;
-    const requests = [...rowNumbers]
-      .sort((a, b) => b - a)
-      .map((rowNumber) => ({
-        deleteDimension: {
-          range: { sheetId, dimension: 'ROWS', startIndex: rowNumber - 1, endIndex: rowNumber },
-        },
-      }));
-    await sheetsFetch(':batchUpdate', { method: 'POST', body: JSON.stringify({ requests }) });
+    await ensureDb();
+    return updateRow(key, id, patch);
   };
 
   const remove = async (key: SheetKey, id: string) => {
-    if (key === 'clients') {
-      const prices = await readGrid(SHEET_BY_KEY.unit_prices);
-      await removeRows(
-        SHEET_BY_KEY.unit_prices,
-        prices.sheetRowNumbers.filter((_, index) => prices.rows[index].client_id === id)
-      );
-      const projects = await readGrid(SHEET_BY_KEY.projects);
-      for (let index = 0; index < projects.rows.length; index += 1) {
-        if (projects.rows[index].client_id !== id) continue;
-        await writeRow(SHEET_BY_KEY.projects, projects.sheetRowNumbers[index], projects.columns, {
-          ...projects.rows[index],
-          client_id: null,
-        });
-      }
-    }
-    if (key === 'projects') {
-      const tasks = await readGrid(SHEET_BY_KEY.tasks);
-      const taskIds = new Set(
-        tasks.rows.filter((row) => row.project_id === id).map((row) => String(row.id))
-      );
-      const invoiceItems = await readGrid(SHEET_BY_KEY.invoice_items);
-      for (let index = 0; index < invoiceItems.rows.length; index += 1) {
-        if (!taskIds.has(String(invoiceItems.rows[index].task_id || ''))) continue;
-        await writeRow(SHEET_BY_KEY.invoice_items, invoiceItems.sheetRowNumbers[index], invoiceItems.columns, {
-          ...invoiceItems.rows[index],
-          task_id: null,
-        });
-      }
-      await removeRows(
-        SHEET_BY_KEY.tasks,
-        tasks.sheetRowNumbers.filter((_, index) => tasks.rows[index].project_id === id)
-      );
-    }
-    if (key === 'clients') {
-      const invoices = await readGrid(SHEET_BY_KEY.invoices);
-      const invoiceIds = new Set(
-        invoices.rows.filter((row) => row.client_id === id).map((row) => String(row.id))
-      );
-      const invoiceItems = await readGrid(SHEET_BY_KEY.invoice_items);
-      await removeRows(
-        SHEET_BY_KEY.invoice_items,
-        invoiceItems.sheetRowNumbers.filter((_, index) => invoiceIds.has(String(invoiceItems.rows[index].invoice_id || '')))
-      );
-      await removeRows(
-        SHEET_BY_KEY.invoices,
-        invoices.sheetRowNumbers.filter((_, index) => invoices.rows[index].client_id === id)
-      );
-    }
-    if (key === 'invoices') {
-      const invoiceItems = await readGrid(SHEET_BY_KEY.invoice_items);
-      await removeRows(
-        SHEET_BY_KEY.invoice_items,
-        invoiceItems.sheetRowNumbers.filter((_, index) => invoiceItems.rows[index].invoice_id === id)
-      );
-    }
-    const spec = SHEET_BY_KEY[key];
-    const grid = await readGrid(spec);
-    const index = grid.rows.findIndex((row) => row.id === id);
-    if (index < 0) return;
-    await removeRows(spec, [grid.sheetRowNumbers[index]]);
+    await ensureDb();
+    deleteRow(key, id);
   };
 
-  const replaceInvoiceItems = async (invoiceId: string, items: Row[]) => {
-    const spec = SHEET_BY_KEY.invoice_items;
-    const grid = await readGrid(spec);
-    await removeRows(
-      spec,
-      grid.sheetRowNumbers.filter((_, index) => grid.rows[index].invoice_id === invoiceId)
-    );
-    for (const item of items) {
-      await create('invoice_items', { ...item, invoice_id: invoiceId });
+  const importFromSheets = async (spreadsheetId: string, mode: 'upsert' | 'replace_all') => {
+    await ensureDb();
+    const access = await token();
+    const summaries: UpsertSummary[] = [];
+    for (const key of IMPORT_ORDER) {
+      const rows = await readSheetRows(spreadsheetId, access, key);
+      summaries.push(mode === 'replace_all' ? replaceAllRows(key, rows) : upsertRows(key, rows));
     }
+    const fkWarnings = validateForeignKeys();
+    const inserted = summaries.reduce((sum, item) => sum + item.inserted, 0);
+    const updated = summaries.reduce((sum, item) => sum + item.updated, 0);
+    const skipped = summaries.reduce((sum, item) => sum + item.skipped, 0);
+    const warnings = [...summaries.flatMap((item) => item.warnings), ...fkWarnings];
+    return { ok: true as const, mode, inserted, updated, skipped, warnings, tables: summaries };
   };
 
-  const initializeSchema = async () => {
-    await loadSheetIds();
-    for (const spec of SHEETS) {
-      await ensureSheet(spec);
-      await readGrid(spec);
-    }
-    await loadSheetIds();
-    const leftover = [...sheetIds.entries()].filter(([title]) => title === 'Sheet1' || title === 'シート1');
-    const unused: [string, number][] = [];
-    for (const [title, leftoverId] of leftover) {
-      const data = (await sheetsFetch(
-        `/values/${encodeURIComponent(`${quoteTitle(title)}!A:ZZ`)}?valueRenderOption=UNFORMATTED_VALUE`
-      )) as { values?: unknown[][] };
-      const hasContent = (data.values || []).some(
-        (row) => Array.isArray(row) && row.some((cell) => String(cell ?? '').trim())
-      );
-      if (!hasContent) unused.push([title, leftoverId]);
-    }
-    if (unused.length > 0 && unused.length < sheetIds.size) {
-      await sheetsFetch(':batchUpdate', {
-        method: 'POST',
-        body: JSON.stringify({
-          requests: unused.map(([, leftoverId]) => ({ deleteSheet: { sheetId: leftoverId } })),
-        }),
-      });
-      for (const [title] of unused) sheetIds.delete(title);
+  const exportToSheets = async (spreadsheetId: string) => {
+    await ensureDb();
+    const access = await token();
+    await prepareWorkspaceSheets(spreadsheetId, access);
+    for (const key of IMPORT_ORDER) {
+      await writeSheetRows(spreadsheetId, access, key, listRows(key));
     }
     return {
+      ok: true as const,
       spreadsheetId,
       url: spreadsheetUrl(spreadsheetId),
-      sheets: SHEETS.map((spec) => spec.title),
+      sheets: SHEETS.map((sheet) => sheet.title),
+      counts: Object.fromEntries(IMPORT_ORDER.map((key) => [key, listRows(key).length])),
     };
   };
 
@@ -580,39 +212,30 @@ export function createSheetsApi(env: Env) {
     }
 
     const requestSheetId = parseSpreadsheetId(String(req.headers['x-spreadsheet-id'] || ''));
-    const withSheet = <T>(fn: () => Promise<T>) => locked(fn, requestSheetId);
 
     try {
+      await ensureDb();
+
       if (req.method === 'GET' && url.pathname === '/api/health') {
+        let googleOk = true;
+        let googleError = '';
         try {
           await connectAuth();
         } catch (error) {
-          send(res, 200, {
-            ok: false,
-            serviceAccountEmail: '',
-            spreadsheetId: null,
-            spreadsheetUrl: null,
-            error: error instanceof Error ? error.message : 'サービスアカウントに接続できません。',
-          });
-          return;
+          googleOk = false;
+          googleError = error instanceof Error ? error.message : 'サービスアカウントに接続できません。';
         }
         const storedSheetId = parseSpreadsheetId(readAppSettings(env).settings.data_spreadsheet_url || '');
         const envId = env.GOOGLE_SPREADSHEET_ID?.trim() || '';
         const id = requestSheetId || storedSheetId || envId;
-        if (id) {
-          try {
-            await withSheet(async () => {
-              await loadSheetIds();
-            });
-          } catch {
-            /* 設定画面ではメールとURLの提示を優先します */
-          }
-        }
         send(res, 200, {
-          ok: true,
-          serviceAccountEmail: accountEmail,
+          ok: databaseReady(),
+          databasePath: databasePath(env),
+          serviceAccountEmail: googleOk ? accountEmail : '',
           spreadsheetId: id || null,
           spreadsheetUrl: id ? spreadsheetUrl(id) : null,
+          googleOk,
+          error: googleOk ? null : googleError,
         });
         return;
       }
@@ -658,8 +281,9 @@ export function createSheetsApi(env: Env) {
       if (req.method === 'POST' && url.pathname === '/api/sheets/create') {
         try {
           await readBody(req);
-          const initialized = await withSheet(() => initializeSchema());
-          send(res, 200, initialized);
+          const spreadsheetId = workspaceSpreadsheetId(requestSheetId);
+          const prepared = await withGoogle(async () => prepareWorkspaceSheets(spreadsheetId, await token()));
+          send(res, 200, { ...prepared, url: spreadsheetUrl(spreadsheetId) });
         } catch (error) {
           const message = error instanceof Error ? error.message : 'シートと項目名の作成に失敗しました。';
           send(res, 500, { error: message });
@@ -667,16 +291,48 @@ export function createSheetsApi(env: Env) {
         return;
       }
 
+      if (req.method === 'POST' && url.pathname === '/api/sheets/import') {
+        const body = JSON.parse((await readBody(req)) || '{}') as {
+          spreadsheetUrl?: string;
+          mode?: 'upsert' | 'replace_all';
+        };
+        const mode = body.mode === 'replace_all' ? 'replace_all' : 'upsert';
+        const spreadsheetId =
+          parseSpreadsheetId(body.spreadsheetUrl || '') || workspaceSpreadsheetId(requestSheetId);
+        try {
+          const result = await withGoogle(() => importFromSheets(spreadsheetId, mode));
+          send(res, 200, result);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'インポートに失敗しました。';
+          send(res, 500, { error: message });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/sheets/export') {
+        const body = JSON.parse((await readBody(req)) || '{}') as { spreadsheetUrl?: string };
+        const spreadsheetId =
+          parseSpreadsheetId(body.spreadsheetUrl || '') || workspaceSpreadsheetId(requestSheetId);
+        try {
+          const result = await withGoogle(() => exportToSheets(spreadsheetId));
+          send(res, 200, result);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'エクスポートに失敗しました。';
+          send(res, 500, { error: message });
+        }
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname === '/api/invoices/pdf') {
         const body = JSON.parse((await readBody(req)) || '{}') as InvoicePdfRequest;
-        const pdf = await withSheet(async () => {
-          return renderInvoicePdf({
+        const pdf = await withPdfWorkspace(requestSheetId, async (spreadsheetId) =>
+          renderInvoicePdf({
             getToken: token,
             destinationSpreadsheetId: spreadsheetId,
             serviceAccountEmail: accountEmail,
             input: body,
-          });
-        });
+          })
+        );
         send(res, 200, {
           filename: pdf.filename,
           pdfBase64: pdf.bytes.toString('base64'),
@@ -698,7 +354,7 @@ export function createSheetsApi(env: Env) {
           return;
         }
         try {
-          await connect(requestSheetId);
+          await connectAuth();
           const checked = await findDriveFileInFolder({
             getToken: token,
             folderUrl,
@@ -737,7 +393,7 @@ export function createSheetsApi(env: Env) {
           return;
         }
         try {
-          await connect(requestSheetId);
+          await connectAuth();
           const bytes = Buffer.from(pdfBase64, 'base64');
           if (!bytes.length) {
             send(res, 400, { error: '保存するPDFがありません。' });
@@ -807,18 +463,17 @@ export function createSheetsApi(env: Env) {
           return;
         }
         try {
-          const result = await withSheet(() =>
-            pushTaskToCalendar(
-              {
-                getToken: token,
-                serviceAccountEmail: accountEmail,
-                list,
-                update,
-              },
-              calendarId,
-              taskId,
-              { deleteEvent: Boolean(body.deleteEvent) }
-            )
+          await connectAuth();
+          const result = await pushTaskToCalendar(
+            {
+              getToken: token,
+              serviceAccountEmail: accountEmail,
+              list,
+              update,
+            },
+            calendarId,
+            taskId,
+            { deleteEvent: Boolean(body.deleteEvent) }
           );
           send(res, 200, result);
         } catch (error) {
@@ -837,16 +492,15 @@ export function createSheetsApi(env: Env) {
           return;
         }
         try {
-          const result = await withSheet(() =>
-            inspectCalendar(
-              {
-                getToken: token,
-                serviceAccountEmail: accountEmail,
-                list,
-                update,
-              },
-              calendarId
-            )
+          await connectAuth();
+          const result = await inspectCalendar(
+            {
+              getToken: token,
+              serviceAccountEmail: accountEmail,
+              list,
+              update,
+            },
+            calendarId
           );
           send(res, 200, result);
         } catch (error) {
@@ -867,17 +521,16 @@ export function createSheetsApi(env: Env) {
           return;
         }
         try {
-          const result = await withSheet(() =>
-            pullCalendarChanges(
-              {
-                getToken: token,
-                serviceAccountEmail: accountEmail,
-                list,
-                update,
-              },
-              calendarId,
-              body.syncToken || null
-            )
+          await connectAuth();
+          const result = await pullCalendarChanges(
+            {
+              getToken: token,
+              serviceAccountEmail: accountEmail,
+              list,
+              update,
+            },
+            calendarId,
+            body.syncToken || null
           );
           send(res, 200, result);
         } catch (error) {
@@ -894,7 +547,7 @@ export function createSheetsApi(env: Env) {
           send(res, 400, { error: '請求書IDがありません。' });
           return;
         }
-        await withSheet(() => replaceInvoiceItems(body.invoice_id as string, body.items || []));
+        replaceInvoiceItems(body.invoice_id, body.items || []);
         send(res, 200, { ok: true });
         return;
       }
@@ -905,8 +558,7 @@ export function createSheetsApi(env: Env) {
           send(res, 400, { error: '並び順がありません。' });
           return;
         }
-        await withSheet(() => reorder('unit_prices', body.ids as string[]));
-        send(res, 200, { ok: true });
+        send(res, 200, reorderUnitPrices(body.ids));
         return;
       }
 
@@ -921,27 +573,27 @@ export function createSheetsApi(env: Env) {
       const id = match[2] ? decodeURIComponent(match[2]) : '';
 
       if (req.method === 'GET' && !id) {
-        send(res, 200, await withSheet(() => list(key)));
+        send(res, 200, await list(key));
         return;
       }
       if (req.method === 'POST' && !id) {
         const body = JSON.parse((await readBody(req)) || '{}') as Row;
-        send(res, 200, await withSheet(() => create(key, body)));
+        send(res, 200, await create(key, body));
         return;
       }
       if (req.method === 'PATCH' && id) {
         const body = JSON.parse((await readBody(req)) || '{}') as Row;
-        send(res, 200, await withSheet(() => update(key, id, body)));
+        send(res, 200, await update(key, id, body));
         return;
       }
       if (req.method === 'DELETE' && id) {
-        await withSheet(() => remove(key, id));
+        await remove(key, id);
         send(res, 200, { ok: true });
         return;
       }
       send(res, 405, { error: 'Method not allowed' });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Sheets API error';
+      const message = error instanceof Error ? error.message : 'API error';
       send(res, 500, { error: message });
     }
   };

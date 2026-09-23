@@ -2,12 +2,16 @@
 # 更新: Docker → プロジェクト → Compose 設定 → Redeploy → Pull latest image
 #
 # UGREEN: 「更新あり」→ 更新（Pull latest）でイメージを入れ替え
-# 完成品: ghcr.io/3comma-prg/stagecrew:alpha_1.0.0
-# 画面表示は ver α_1.0.0。Docker タグに α は使えないため alpha と表記する。
+# 完成品: ghcr.io/3comma-prg/stagecrew:alpha_2.0.0
+# 画面表示は ver α_2.0.0。Docker タグに α は使えないため alpha と表記する。
+#
+# データ永続化: ./data に app-settings.json と stagecrew.sqlite が保存されます
+# 初回 Sheets→SQLite 移行例:
+#   docker compose run --rm app node dist-server/migrate.mjs
 
 services:
   app:
-    image: ghcr.io/3comma-prg/stagecrew:alpha_1.0.0
+    image: ghcr.io/3comma-prg/stagecrew:alpha_2.0.0
     container_name: stagecrew
     ports:
       - "5173:5173"
@@ -18,6 +22,7 @@ services:
       HOST: 0.0.0.0
       SETTINGS_FILE: /app/data/app-settings.json
       SETTINGS_DEFAULTS_FILE: /app/defaults/app-settings.json
+      DATABASE_PATH: /app/data/stagecrew.sqlite
     volumes:
       - ./data:/app/data
     restart: unless-stopped

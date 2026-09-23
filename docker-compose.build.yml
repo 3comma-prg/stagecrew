@@ -5,7 +5,7 @@ services:
   app:
     build:
       context: .
-    image: stagecrew:alpha_1.0.0
+    image: stagecrew:alpha_2.0.0
     container_name: stagecrew
     ports:
       - "5173:5173"
@@ -16,6 +16,7 @@ services:
       HOST: 0.0.0.0
       SETTINGS_FILE: /app/data/app-settings.json
       SETTINGS_DEFAULTS_FILE: /app/defaults/app-settings.json
+      DATABASE_PATH: /app/data/stagecrew.sqlite
     volumes:
       - ./data:/app/data
     restart: unless-stopped

@@ -28,8 +28,8 @@ export function compareCreatedAt(a: { created_at?: string | null }, b: { created
 export const DEFAULT_APP_NAME = 'Stagecrew';
 export const DEFAULT_APP_TAGLINE = '業務管理';
 export const DEFAULT_APP_FOOTER = 'スケジュール・請求書管理システム';
-/** 画面表示。Docker タグは alpha_1.0.0（タグに α は使えない）。 */
-export const APP_VERSION_LABEL = 'ver α_1.0.0';
+/** 画面表示。Docker タグは alpha_2.0.0（タグに α は使えない）。 */
+export const APP_VERSION_LABEL = 'ver α_2.0.0';
 
 export interface GoogleIntegrationSettings {
   id: number;

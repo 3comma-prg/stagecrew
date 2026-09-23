@@ -23,4 +23,6 @@ dist-ssr
 *.sw?
 .env
 data/*.json
+data/*.sqlite
+data/*.sqlite-*
 !data/.gitkeep

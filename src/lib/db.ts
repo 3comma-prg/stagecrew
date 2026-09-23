@@ -129,6 +129,42 @@ export async function initializeDataSpreadsheet() {
   return { spreadsheetId: id, url: data.url || spreadsheetUrlFromId(id), sheets: data.sheets || [] };
 }
 
+export type SheetTransferSummary = {
+  ok: boolean;
+  mode?: 'upsert' | 'replace_all';
+  inserted?: number;
+  updated?: number;
+  skipped?: number;
+  warnings?: string[];
+  url?: string;
+  sheets?: string[];
+  counts?: Record<string, number>;
+  error?: string;
+};
+
+export async function importFromSpreadsheet(options?: {
+  spreadsheetUrl?: string;
+  mode?: 'upsert' | 'replace_all';
+}) {
+  const result = await request<SheetTransferSummary>('/api/sheets/import', {
+    method: 'POST',
+    body: JSON.stringify({
+      spreadsheetUrl: options?.spreadsheetUrl || undefined,
+      mode: options?.mode || 'upsert',
+    }),
+  });
+  resetSheetsCache();
+  await preloadSheets();
+  return result;
+}
+
+export async function exportToSpreadsheet(options?: { spreadsheetUrl?: string }) {
+  return request<SheetTransferSummary>('/api/sheets/export', {
+    method: 'POST',
+    body: JSON.stringify({ spreadsheetUrl: options?.spreadsheetUrl || undefined }),
+  });
+}
+
 export function preloadSheets() {
   if (!inflight) {
     inflight = loadRaw()
