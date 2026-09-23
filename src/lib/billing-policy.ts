@@ -4,7 +4,10 @@ import {
   inclusiveDayCount,
   parseOptionList,
   serializeOptionList,
+  summarizeBilling,
+  taskMonthKeys,
   taskDateRange,
+  type BillingStatus,
   type Client,
   type Project,
   type Task,
@@ -335,4 +338,61 @@ export function effectiveGapHint(
   client: Pick<Client, 'billing_timing' | 'show_group_gap_days'> | null | undefined
 ): number {
   return resolveShowGroupGapDays(project, client);
+}
+
+/**
+ * 請求書に載っている月と日程月をあわせた表示用キー。
+ * 本番まとめで請求月が日程とずれる場合も請求済み月が見えるようにする。
+ */
+export function taskBillingDisplayMonths(
+  task: Parameters<typeof taskMonthKeys>[0],
+  billedMonths?: Record<string, BillingStatus> | null
+): string[] {
+  const months = new Set(taskMonthKeys(task));
+  if (billedMonths) {
+    for (const month of Object.keys(billedMonths)) months.add(month);
+  }
+  return [...months].sort();
+}
+
+/**
+ * 請求書の状態からスケジュールの billing_status を決める。
+ * 本番まとめ（wholePeriod）では請求月＝日程月とは限らないため、解決した請求月／請求書上の月を優先する。
+ */
+export function summarizeTaskBillingStatus(
+  task: Task,
+  billedMonths: Record<string, BillingStatus>,
+  projectTasks: Task[],
+  client?: Pick<Client, 'billing_timing' | 'show_group_gap_days' | 'non_billable_task_types'> | null,
+  project?: Pick<Project, 'billing_timing' | 'show_group_gap_days'> | null
+): BillingStatus {
+  if (task.is_billable === false) return 'not_billable';
+
+  const resolved = resolveTaskBilling(task, projectTasks, client, project);
+  const invoiceMonths = Object.keys(billedMonths);
+
+  if (resolved.kind === 'not_billable') return 'not_billable';
+
+  if (resolved.kind === 'waiting_show') {
+    return invoiceMonths.length > 0 ? summarizeBilling(Object.values(billedMonths)) : 'unbilled';
+  }
+
+  if (resolved.wholePeriod) {
+    const status = billedMonths[resolved.billingMonth];
+    if (status) return status;
+    // 解決月以外に載っている（手で請求月を変えた等）→ 請求書側を優先
+    return invoiceMonths.length > 0 ? summarizeBilling(Object.values(billedMonths)) : 'unbilled';
+  }
+
+  // 月締め: 日程がかかる各月。請求書だけ別月にある場合はそれも含める
+  const calendarMonths = taskMonthKeys(task);
+  if (calendarMonths.length === 0) {
+    return invoiceMonths.length > 0 ? summarizeBilling(Object.values(billedMonths)) : 'unbilled';
+  }
+
+  const months = new Set(calendarMonths);
+  for (const month of invoiceMonths) months.add(month);
+  return summarizeBilling(
+    [...months].sort().map((month) => billedMonths[month] ?? 'unbilled')
+  );
 }

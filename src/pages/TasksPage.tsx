@@ -13,7 +13,6 @@ import {
   monthBillingLabel,
   monthBillingStatus,
   strongerBilling,
-  taskMonthKeys,
   compareCatalogOrder,
   getTaskSubtitle,
 } from '@/types';
@@ -27,12 +26,14 @@ import { CalendarRefreshButton } from '@/components/CalendarRefreshButton';
 import { CancelledBanner, CancelledTitle, cancelledCardClass } from '@/components/CancelledMark';
 import { CollapsedSection, isClosedProjectStatus } from '@/components/CollapsedSection';
 import { errorFor, inputErrorClass, validateScheduleForm, type FieldError } from '@/lib/schedule-form';
+import { parseInvoiceTaskIds } from '@/lib/invoice-line-merge';
 import { useSessionPref } from '@/lib/session-list-prefs';
 import { useCatalogOptions } from '@/lib/catalog-options';
 import {
   defaultsFromClient,
   normalizeBillingTimingSetting,
   normalizeShowGroupLink,
+  taskBillingDisplayMonths,
   type BillingTimingSetting,
   type ShowGroupLink,
 } from '@/lib/billing-policy';
@@ -60,7 +61,15 @@ function asInvoice(value: unknown): { billing_month: string; status: string } | 
 }
 
 function MonthBillingBadges({ task, billedMonths }: { task: Task; billedMonths?: Record<string, BillingStatus> }) {
-  const months = taskMonthKeys(task);
+  if (task.is_billable === false || task.billing_status === 'not_billable') {
+    return (
+      <Badge
+        label={BILLING_STATUS_LABELS.not_billable}
+        className={BILLING_STATUS_COLORS.not_billable}
+      />
+    );
+  }
+  const months = taskBillingDisplayMonths(task, billedMonths);
   if (months.length === 0) {
     return (
       <Badge
@@ -141,15 +150,16 @@ export function TasksPage() {
       const billedItems = (await listInvoiceItems()).filter((item) => item.task_id);
       const next: BillingByTask = {};
       for (const item of billedItems) {
-        if (!item.task_id) continue;
         const invoice = asInvoice(item.invoice);
         const status = billingFromInvoiceStatus(invoice?.status);
         if (!invoice?.billing_month || !status) continue;
-        const current = next[item.task_id] || {};
-        current[invoice.billing_month] = current[invoice.billing_month]
-          ? strongerBilling(current[invoice.billing_month], status)
-          : status;
-        next[item.task_id] = current;
+        for (const taskId of parseInvoiceTaskIds(item.task_id)) {
+          const current = next[taskId] || {};
+          current[invoice.billing_month] = current[invoice.billing_month]
+            ? strongerBilling(current[invoice.billing_month], status)
+            : status;
+          next[taskId] = current;
+        }
       }
       setBillingByTask(next);
     } catch (error) {
@@ -282,7 +292,7 @@ export function TasksPage() {
       is_domestic: form.is_domestic,
       venue_size: form.venue_size || null,
       notes: form.notes || null,
-      billing_status: form.is_billable ? form.billing_status : 'unbilled',
+      billing_status: form.is_billable ? form.billing_status : 'not_billable',
       is_billable: form.is_billable,
       billing_timing: form.billing_timing,
       show_group_link: form.show_group_link,
@@ -332,12 +342,19 @@ export function TasksPage() {
       (t.notes || '').toLowerCase().includes(search.toLowerCase()) ||
       (t.project?.project_name || '').toLowerCase().includes(search.toLowerCase()) ||
       clientName(t.project?.client).toLowerCase().includes(search.toLowerCase());
-    const months = taskMonthKeys(t);
+    const months = taskBillingDisplayMonths(t, billingByTask[t.id]);
+    const effectiveStatus =
+      t.is_billable === false || t.billing_status === 'not_billable' ? 'not_billable' : t.billing_status;
     const matchesBilling =
       billingFilter === 'all' ||
-      (months.length === 0
-        ? t.billing_status === billingFilter
-        : months.some((month) => monthBillingStatus(t, month, billingByTask[t.id]) === billingFilter));
+      (billingFilter === 'unbilled'
+        ? effectiveStatus === 'unbilled'
+        : billingFilter === 'not_billable'
+          ? effectiveStatus === 'not_billable'
+          : months.length === 0
+            ? effectiveStatus === billingFilter
+            : months.some((month) => monthBillingStatus(t, month, billingByTask[t.id]) === billingFilter) ||
+              effectiveStatus === billingFilter);
     const matchesProject = projectFilter === 'all' || t.project_id === projectFilter;
     return matchesSearch && matchesBilling && matchesProject;
   });
@@ -417,7 +434,7 @@ export function TasksPage() {
         <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
           <span className="shrink-0 text-xs font-medium text-slate-400">請求状態</span>
           <div className="flex flex-wrap gap-2">
-          {(['all', 'unbilled', 'draft', 'billed', 'paid'] as const).map((s) => (
+          {(['all', 'unbilled', 'draft', 'billed', 'paid', 'not_billable'] as const).map((s) => (
             <button
               key={s}
               onClick={() => patchListPrefs({ billingFilter: s })}

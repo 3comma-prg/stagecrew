@@ -24,11 +24,8 @@ import {
   getTaskDayCount,
   inclusiveDayCount,
   monthBounds,
-  monthBillingStatus,
   strongerBilling,
-  summarizeBilling,
   taskDateRange,
-  taskMonthKeys,
   invoiceTotals,
   TAX_TYPE_LABELS,
   clientName,
@@ -39,7 +36,19 @@ import type { TaxType } from '@/types';
 import {
   importPeriodForBillingMonth,
   resolveTaskBilling,
+  summarizeTaskBillingStatus,
 } from '@/lib/billing-policy';
+import {
+  canMergeLines,
+  INVOICE_DATE_SUFFIX,
+  invoiceItemHasTaskId,
+  mergeLinesIntoOne,
+  mergeSameVenueShowLines,
+  parseInvoiceTaskIds,
+  primaryInvoiceTaskId,
+  stripInvoiceDateSuffix,
+  type DateRange,
+} from '@/lib/invoice-line-merge';
 import { checkDrivePdfExists, createInvoiceGmailDraft, ensureInvoicePdf, fetchInvoicePdf, invoicePdfFilename, saveInvoicePdfToDriveFolder, suggestRenamedPdfFilename, type InvoicePdfRequest } from '@/lib/invoice-pdf';
 import { InvoicePdfPages } from '@/components/InvoicePdfPages';
 import { loadSettings } from '@/lib/local-store';
@@ -87,6 +96,7 @@ type EditInvoiceItem = {
   amount: number;
   task_id: string | null;
   task?: Task | null;
+  period?: DateRange | null;
   sort_order?: number | null;
   price_manual?: boolean;
 };
@@ -166,7 +176,7 @@ function orderLineItems<T extends { task?: Task | null; sort_order?: number | nu
 }
 
 const QUANTITY_UNITS: QuantityUnit[] = ['日', '式'];
-const DATE_SUFFIX = /\s*\(\d{1,2}\/\d{1,2}(?:～\d{1,2}(?:\/\d{1,2})?)?\)$/;
+const DATE_SUFFIX = INVOICE_DATE_SUFFIX;
 
 function withItemDate(description: string, task?: Task | null): string {
   const trimmed = description.trim();
@@ -207,7 +217,7 @@ function dominantTaxRate(items: EditInvoiceItem[], priceList: UnitPrice[], fallb
 }
 
 function descriptionForPeriod(description: string, task: Task, period: { start: string; end: string }): string {
-  const base = description.replace(DATE_SUFFIX, '').trim() || getScheduleName(task);
+  const base = stripInvoiceDateSuffix(description) || getScheduleName(task);
   return `${base} ${formatDateSuffix(period.start, period.end)}`;
 }
 
@@ -236,6 +246,17 @@ function correctCrossMonthLine(
   if (!item.task || quantityUnit !== '日') {
     return {
       description: withItemDate(item.description, item.task),
+      quantity: storedQuantity,
+      quantity_unit: quantityUnit,
+      unit_price: storedUnitPrice,
+      corrected: false,
+    };
+  }
+
+  // 複数スケジュールをまとめた行は、保存済みの品名・数量を維持する
+  if (parseInvoiceTaskIds(item.task_id).length > 1) {
+    return {
+      description: item.description,
       quantity: storedQuantity,
       quantity_unit: quantityUnit,
       unit_price: storedUnitPrice,
@@ -316,6 +337,7 @@ function lineFromTask(
     amount: quantity * unitPrice,
     task_id: task.id,
     task,
+    period,
     price_manual: false,
   };
 }
@@ -430,30 +452,42 @@ function asInvoice(value: unknown): { billing_month: string; status: string } | 
 }
 
 async function syncTaskBillingStatus(taskIds: (string | null | undefined)[]) {
-  const ids = [...new Set(taskIds.filter((id): id is string => !!id))];
+  const ids = [
+    ...new Set(
+      taskIds.flatMap((id) => parseInvoiceTaskIds(id)).filter((id): id is string => !!id)
+    ),
+  ];
   if (ids.length === 0) return;
 
-  const tasks = (await listTasks({ includeDeleted: true })).filter((task) => ids.includes(task.id));
-  const items = (await listInvoiceItems()).filter((item) => item.task_id && ids.includes(item.task_id));
+  const allTasks = await listTasks({ includeDeleted: true });
+  const tasks = allTasks.filter((task) => ids.includes(task.id));
+  const items = (await listInvoiceItems()).filter((item) =>
+    parseInvoiceTaskIds(item.task_id).some((id) => ids.includes(id))
+  );
 
   const billed = new Map<string, Record<string, BillingStatus>>();
   for (const item of items || []) {
-    if (!item.task_id) continue;
     const invoice = asInvoice(item.invoice);
     const status = billingFromInvoiceStatus(invoice?.status);
     if (!invoice?.billing_month || !status) continue;
-    const current = billed.get(item.task_id) || {};
-    current[invoice.billing_month] = current[invoice.billing_month]
-      ? strongerBilling(current[invoice.billing_month], status)
-      : status;
-    billed.set(item.task_id, current);
+    for (const taskId of parseInvoiceTaskIds(item.task_id)) {
+      const current = billed.get(taskId) || {};
+      current[invoice.billing_month] = current[invoice.billing_month]
+        ? strongerBilling(current[invoice.billing_month], status)
+        : status;
+      billed.set(taskId, current);
+    }
   }
 
   for (const task of tasks || []) {
-    const months = taskMonthKeys(task);
     const byMonth = billed.get(task.id) || {};
-    const summary = summarizeBilling(
-      months.map((month) => monthBillingStatus(task, month, byMonth))
+    const projectTasks = allTasks.filter((row) => row.project_id === task.project_id);
+    const summary = summarizeTaskBillingStatus(
+      task,
+      byMonth,
+      projectTasks,
+      task.project?.client,
+      task.project
     );
     if (summary !== task.billing_status) {
       try {
@@ -517,6 +551,8 @@ export function InvoicesPage() {
 
   const [editItems, setEditItems] = useState<EditInvoiceItem[]>([]);
   const [autoImported, setAutoImported] = useState(false);
+  const [mergeSameVenueOnImport, setMergeSameVenueOnImport] = useState(false);
+  const [selectedItemKeys, setSelectedItemKeys] = useState<string[]>([]);
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const dragFromRef = useRef<number | null>(null);
@@ -532,7 +568,10 @@ export function InvoicesPage() {
         (await listInvoices()).map((inv) => {
           const invoiceItems = (inv.invoice_items || []).map((item) => ({
             ...item,
-            task: item.task_id ? taskById.get(item.task_id) ?? null : null,
+            task: (() => {
+              const primary = primaryInvoiceTaskId(item.task_id);
+              return primary ? taskById.get(primary) ?? null : null;
+            })(),
           }));
           return {
             ...inv,
@@ -579,6 +618,8 @@ export function InvoicesPage() {
     });
     setEditItems([]);
     setAutoImported(false);
+    setSelectedItemKeys([]);
+    setMergeSameVenueOnImport(false);
     setFormErrors([]);
     setModalOpen(true);
   };
@@ -597,6 +638,7 @@ export function InvoicesPage() {
         amount: itemAmount(corrected.quantity, corrected.unit_price),
         task_id: item.task_id,
         task: item.task,
+        period: item.task ? taskDateRange(item.task) : null,
         sort_order: item.sort_order,
         price_manual: Boolean(item.price_manual),
       };
@@ -623,6 +665,8 @@ export function InvoicesPage() {
     });
     setEditItems(orderLineItems(items, inv.billing_month, monthTasks));
     setAutoImported(true);
+    setSelectedItemKeys([]);
+    setMergeSameVenueOnImport(false);
     setFormErrors([]);
     setModalOpen(true);
   };
@@ -738,7 +782,31 @@ export function InvoicesPage() {
   };
 
   const removeItem = (index: number) => {
+    const removed = editItems[index];
     setEditItems(editItems.filter((_, i) => i !== index));
+    if (removed) {
+      setSelectedItemKeys((keys) => keys.filter((key) => key !== removed.key));
+    }
+  };
+
+  const toggleItemSelected = (key: string) => {
+    setSelectedItemKeys((keys) => (keys.includes(key) ? keys.filter((k) => k !== key) : [...keys, key]));
+  };
+
+  const mergeSelectedItems = () => {
+    const selected = editItems.filter((item) => selectedItemKeys.includes(item.key));
+    const check = canMergeLines(selected);
+    if (!check.ok) {
+      alert(check.reason);
+      return;
+    }
+    const firstIndex = editItems.findIndex((item) => selectedItemKeys.includes(item.key));
+    const merged = mergeLinesIntoOne(selected, newItemKey);
+    const selectedSet = new Set(selectedItemKeys);
+    const next = editItems.filter((item) => !selectedSet.has(item.key));
+    next.splice(Math.max(0, firstIndex), 0, merged);
+    setEditItems(next);
+    setSelectedItemKeys([]);
   };
 
   const reorderItems = (from: number, to: number) => {
@@ -818,7 +886,7 @@ export function InvoicesPage() {
       monthTasks.push(task);
 
       const onOtherInvoice = billedItems.some((item) => {
-        if (item.task_id !== task.id || item.invoice_id === editing?.id) return false;
+        if (!invoiceItemHasTaskId(item.task_id, task.id) || item.invoice_id === editing?.id) return false;
         const invoice = asInvoice(item.invoice);
         if (!invoice) return false;
         if (periodInfo.wholePeriod) return true;
@@ -835,6 +903,9 @@ export function InvoicesPage() {
       else exclusiveItems.push(line);
     }
 
+    const maybeMerge = (items: EditInvoiceItem[]) =>
+      mergeSameVenueOnImport ? mergeSameVenueShowLines(items, newItemKey) : items;
+
     const skipped = skippedBilled;
     if (exclusiveItems.length === 0 && inclusiveItems.length === 0) {
       const extras: string[] = [];
@@ -850,8 +921,9 @@ export function InvoicesPage() {
     }
 
     const applyGroupToForm = (taxType: TaxType, group: EditInvoiceItem[], otherCount: number) => {
-      const ordered = orderLineItems(group, form.billing_month, monthTasks);
+      const ordered = orderLineItems(maybeMerge(group), form.billing_month, monthTasks);
       setEditItems(ordered);
+      setSelectedItemKeys([]);
       setForm((current) => ({
         ...current,
         tax_type: taxType,
@@ -917,7 +989,7 @@ export function InvoicesPage() {
         }));
         for (const taxType of ['exclusive', 'inclusive'] as TaxType[]) {
           const group = taxType === 'inclusive' ? inclusiveItems : exclusiveItems;
-          const ordered = orderLineItems(group, form.billing_month, monthTasks);
+          const ordered = orderLineItems(maybeMerge(group), form.billing_month, monthTasks);
           const taxRate = dominantTaxRate(ordered, priceList, fallbackRate);
           const lineSum = ordered.reduce((sum, item) => sum + itemAmount(item.quantity, item.unit_price), 0);
           const totals = invoiceTotals(lineSum, taxRate, taxType);
@@ -2003,29 +2075,45 @@ export function InvoicesPage() {
             </div>
           </FormField>
 
-          <div className="mb-4 flex flex-col gap-3 rounded-lg border border-teal-100 bg-teal-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-teal-700">
-              クライアントと請求月を選ぶと、請求するスケジュールを取り込みます。通常は月ごとに分けて計上し、本番まとめの案件は期間全体をその請求月に載せます。請求対象外・本番待ちは含みません。
-            </p>
-            <div className="flex shrink-0 flex-wrap gap-2">
-              <button
-                onClick={handleAutoImport}
-                disabled={!form.client_id || !form.billing_month}
-                className="btn-primary"
-              >
-                <Sparkles className="h-4 w-4" />
-                スケジュールから自動取込
-              </button>
-              <button
-                type="button"
-                onClick={handleApplyCatalogPrices}
-                disabled={!form.client_id || applyingPrices || editItems.length === 0}
-                className="btn-secondary"
-              >
-                <RefreshCw className={`h-4 w-4 ${applyingPrices ? 'animate-spin' : ''}`} />
-                {applyingPrices ? '取込中...' : '登録単価を取り込む'}
-              </button>
+          <div className="mb-4 flex flex-col gap-3 rounded-lg border border-teal-100 bg-teal-50 px-4 py-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <p className="text-sm text-teal-700">
+                クライアントと請求月を選ぶと、請求するスケジュールを取り込みます。通常は月ごとに分けて計上し、本番まとめの案件は期間全体をその請求月に載せます。請求対象外・本番待ちは含みません。
+              </p>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <button
+                  onClick={handleAutoImport}
+                  disabled={!form.client_id || !form.billing_month}
+                  className="btn-primary"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  スケジュールから自動取込
+                </button>
+                <button
+                  type="button"
+                  onClick={handleApplyCatalogPrices}
+                  disabled={!form.client_id || applyingPrices || editItems.length === 0}
+                  className="btn-secondary"
+                >
+                  <RefreshCw className={`h-4 w-4 ${applyingPrices ? 'animate-spin' : ''}`} />
+                  {applyingPrices ? '取込中...' : '登録単価を取り込む'}
+                </button>
+              </div>
             </div>
+            <label className="flex cursor-pointer items-start gap-2 text-sm text-teal-800">
+              <input
+                type="checkbox"
+                checked={mergeSameVenueOnImport}
+                onChange={(e) => setMergeSameVenueOnImport(e.target.checked)}
+                className="mt-0.5 rounded border-teal-300 text-teal-600 focus:ring-teal-500"
+              />
+              <span>
+                同会場の本番を1品目にまとめる
+                <span className="mt-0.5 block text-xs font-normal text-teal-700/80">
+                  同一プロジェクト・同一エリア/会場・同一単価の本番（または仕込み/本番）をまとめます。会場が違う場合は分けたままです。
+                </span>
+              </span>
+            </label>
           </div>
 
           <div>
@@ -2033,12 +2121,23 @@ export function InvoicesPage() {
               <div>
                 <label className="text-sm font-medium text-slate-700">明細項目</label>
                 <p className="mt-0.5 text-xs text-slate-400">
-                  初期順は、その月に最初に来るスケジュールのアーティスト順、その中はスケジュール順です。左のつまみで並べ替えできます。
+                  初期順は、その月に最初に来るスケジュールのアーティスト順、その中はスケジュール順です。左のつまみで並べ替えできます。チェックして「選択した項目をまとめる」で品目を結合できます。
                 </p>
               </div>
-              <button onClick={addItem} className="shrink-0 text-sm font-medium text-teal-600 hover:text-teal-700">
-                + 項目追加
-              </button>
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={mergeSelectedItems}
+                  disabled={selectedItemKeys.length < 2}
+                  className="text-sm font-medium text-teal-600 hover:text-teal-700 disabled:cursor-not-allowed disabled:text-slate-300"
+                >
+                  選択した項目をまとめる
+                  {selectedItemKeys.length >= 2 ? ` (${selectedItemKeys.length})` : ''}
+                </button>
+                <button onClick={addItem} className="text-sm font-medium text-teal-600 hover:text-teal-700">
+                  + 項目追加
+                </button>
+              </div>
             </div>
             {unsetPriceCount > 0 ? (
               <div className="mb-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -2091,6 +2190,14 @@ export function InvoicesPage() {
                   >
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={selectedItemKeys.includes(item.key)}
+                          onChange={() => toggleItemSelected(item.key)}
+                          className="rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                          aria-label={`項目 ${i + 1} を選択`}
+                          title="まとめる項目を選択"
+                        />
                         <button
                           type="button"
                           draggable
@@ -2113,6 +2220,11 @@ export function InvoicesPage() {
                         {item.task?.project?.artist_name && (
                           <span className="truncate text-xs text-slate-500">{item.task.project.artist_name}</span>
                         )}
+                        {parseInvoiceTaskIds(item.task_id).length > 1 ? (
+                          <span className="rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 text-[11px] font-medium text-teal-700">
+                            {parseInvoiceTaskIds(item.task_id).length}件まとめ
+                          </span>
+                        ) : null}
                         {isUnsetInvoicePrice(item) ? (
                           <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
                             単価未設定

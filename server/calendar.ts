@@ -333,14 +333,19 @@ function billingFromInvoice(status: string) {
 }
 
 function strongerBilling(current: string, next: string) {
-  const rank: Record<string, number> = { unbilled: 0, draft: 1, billed: 2, paid: 3 };
+  const rank: Record<string, number> = { not_billable: -1, unbilled: 0, draft: 1, billed: 2, paid: 3 };
   return (rank[next] || 0) > (rank[current] || 0) ? next : current;
 }
 
 function billingForTask(task: Row, invoices: Row[], items: Row[]) {
   let status = asString(task.billing_status) || 'unbilled';
+  const taskId = asString(task.id);
   for (const item of items) {
-    if (asString(item.task_id) !== asString(task.id)) continue;
+    const linked = String(item.task_id || '')
+      .split(/[,，]/)
+      .map((id) => id.trim())
+      .filter(Boolean);
+    if (!linked.includes(taskId)) continue;
     const invoice = invoices.find((row) => asString(row.id) === asString(item.invoice_id));
     const next = billingFromInvoice(asString(invoice?.status));
     if (next) status = strongerBilling(status, next);

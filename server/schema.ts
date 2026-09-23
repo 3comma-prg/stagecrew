@@ -156,7 +156,13 @@ const ENUMS: Record<string, Record<string, string>> = {
     入金済: 'paid',
   },
   time_type: { 終日: 'all_day', 時間限定: 'time_limited', 複数日: 'multi_day' },
-  billing_status: { 未請求: 'unbilled', 下書き: 'draft', 請求済: 'billed', 入金済: 'paid' },
+  billing_status: {
+    未請求: 'unbilled',
+    下書き: 'draft',
+    請求済: 'billed',
+    入金済: 'paid',
+    請求対象外: 'not_billable',
+  },
   tax_type: { 外税: 'exclusive', 内税: 'inclusive', 税込み: 'inclusive', 税込: 'inclusive' },
   billing_timing: {
     日程の月で請求: 'schedule_month',

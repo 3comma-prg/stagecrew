@@ -632,7 +632,7 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
       is_domestic: true,
       venue_size: '',
       notes: '',
-      billing_status: 'unbilled',
+      billing_status: defaults.is_billable ? 'unbilled' : 'not_billable',
       is_billable: defaults.is_billable,
       billing_timing: defaults.billing_timing,
       show_group_link: defaults.show_group_link,
@@ -712,7 +712,7 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
       is_domestic: form.is_domestic,
       venue_size: form.venue_size || null,
       notes: form.notes || null,
-      billing_status: form.is_billable ? form.billing_status : 'unbilled',
+      billing_status: form.is_billable ? form.billing_status : 'not_billable',
       is_billable: form.is_billable,
       billing_timing: form.billing_timing,
       show_group_link: form.show_group_link,
@@ -802,8 +802,16 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
                       className="bg-slate-50 text-slate-600 border-slate-200"
                     />
                     <Badge
-                      label={BILLING_STATUS_LABELS[task.billing_status]}
-                      className={BILLING_STATUS_COLORS[task.billing_status]}
+                      label={
+                        task.is_billable === false || task.billing_status === 'not_billable'
+                          ? BILLING_STATUS_LABELS.not_billable
+                          : BILLING_STATUS_LABELS[task.billing_status]
+                      }
+                      className={
+                        task.is_billable === false || task.billing_status === 'not_billable'
+                          ? BILLING_STATUS_COLORS.not_billable
+                          : BILLING_STATUS_COLORS[task.billing_status]
+                      }
                     />
                   </div>
                   <div className="mt-1.5 text-sm font-bold text-slate-800">
@@ -971,6 +979,11 @@ export function TaskForm({
       is_billable: next.is_billable,
       billing_timing: next.billing_timing,
       show_group_link: next.show_group_link,
+      billing_status: next.is_billable
+        ? f.billing_status === 'not_billable'
+          ? 'unbilled'
+          : f.billing_status
+        : 'not_billable',
     }));
   };
 
@@ -983,11 +996,21 @@ export function TaskForm({
           ...f,
           task_type,
           is_billable: nextDefaults.is_billable,
+          billing_status: nextDefaults.is_billable
+            ? f.billing_status === 'not_billable'
+              ? 'unbilled'
+              : f.billing_status
+            : 'not_billable',
         }));
         return;
       }
     } else if (isNew) {
-      setForm((f: any) => ({ ...f, task_type, is_billable: nextDefaults.is_billable }));
+      setForm((f: any) => ({
+        ...f,
+        task_type,
+        is_billable: nextDefaults.is_billable,
+        billing_status: nextDefaults.is_billable ? f.billing_status : 'not_billable',
+      }));
       return;
     }
     setForm((f: any) => ({ ...f, task_type }));
@@ -1216,7 +1239,13 @@ export function TaskForm({
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => setForm((f: any) => ({ ...f, is_billable: true }))}
+              onClick={() =>
+                setForm((f: any) => ({
+                  ...f,
+                  is_billable: true,
+                  billing_status: f.billing_status === 'not_billable' ? 'unbilled' : f.billing_status,
+                }))
+              }
               className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all ${
                 form.is_billable
                   ? 'border-teal-500 bg-teal-50 text-teal-700'
@@ -1227,7 +1256,7 @@ export function TaskForm({
             </button>
             <button
               type="button"
-              onClick={() => setForm((f: any) => ({ ...f, is_billable: false }))}
+              onClick={() => setForm((f: any) => ({ ...f, is_billable: false, billing_status: 'not_billable' }))}
               className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all ${
                 !form.is_billable
                   ? 'border-teal-500 bg-teal-50 text-teal-700'

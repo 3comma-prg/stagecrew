@@ -206,8 +206,16 @@ export function DashboardPage({ onNavigate }: DashboardProps) {
                         <Badge label="キャンセル" className="bg-red-50 text-red-600 border-red-200" />
                       )}
                       <Badge
-                        label={BILLING_STATUS_LABELS[task.billing_status]}
-                        className={BILLING_STATUS_COLORS[task.billing_status]}
+                        label={
+                          task.is_billable === false || task.billing_status === 'not_billable'
+                            ? BILLING_STATUS_LABELS.not_billable
+                            : BILLING_STATUS_LABELS[task.billing_status]
+                        }
+                        className={
+                          task.is_billable === false || task.billing_status === 'not_billable'
+                            ? BILLING_STATUS_COLORS.not_billable
+                            : BILLING_STATUS_COLORS[task.billing_status]
+                        }
                       />
                     </div>
                     <p className="mt-1 text-sm font-medium text-slate-800 truncate">

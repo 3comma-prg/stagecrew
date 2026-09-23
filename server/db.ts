@@ -113,6 +113,10 @@ function migrate(database: Database) {
   database.run('CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_invoice_items_task ON invoice_items(task_id)');
+  // 請求しないのに未請求のまま残っている行を請求対象外へ寄せる
+  database.run(
+    `UPDATE tasks SET billing_status = 'not_billable' WHERE is_billable = 0 AND (billing_status IS NULL OR billing_status = '' OR billing_status = 'unbilled')`
+  );
   database.run('PRAGMA foreign_keys = ON');
 }
 
@@ -247,6 +251,13 @@ function selectFirstColumn(sql: string, params: SqlValue[]) {
   return values.filter(Boolean);
 }
 
+function parseInvoiceTaskIds(raw: unknown): string[] {
+  return String(raw || '')
+    .split(/[,，]/)
+    .map((id) => id.trim())
+    .filter(Boolean);
+}
+
 export function deleteRow(key: SheetKey, id: string) {
   const database = getDatabase();
   if (key === 'clients') {
@@ -259,7 +270,15 @@ export function deleteRow(key: SheetKey, id: string) {
   }
   if (key === 'projects') {
     for (const taskId of selectFirstColumn('SELECT id FROM tasks WHERE project_id = ?', [id])) {
-      database.run('UPDATE invoice_items SET task_id = NULL WHERE task_id = ?', [taskId]);
+      for (const item of listRows('invoice_items')) {
+        const ids = parseInvoiceTaskIds(item.task_id);
+        if (!ids.includes(String(taskId))) continue;
+        const next = ids.filter((value) => value !== String(taskId));
+        database.run('UPDATE invoice_items SET task_id = ? WHERE id = ?', [
+          next.length ? next.join(',') : null,
+          String(item.id),
+        ]);
+      }
     }
     database.run('DELETE FROM tasks WHERE project_id = ?', [id]);
   }
@@ -387,12 +406,17 @@ export function validateForeignKeys(): string[] {
   }
   for (const row of listRows('invoice_items')) {
     const invoiceId = String(row.invoice_id || '');
-    const taskId = String(row.task_id || '');
+    const taskIds = String(row.task_id || '')
+      .split(/[,，]/)
+      .map((id) => id.trim())
+      .filter(Boolean);
     if (invoiceId && !invoices.has(invoiceId)) {
       warnings.push(`請求明細（${row.id}）の請求書IDが見つかりません。`);
     }
-    if (taskId && !tasks.has(taskId)) {
-      warnings.push(`請求明細（${row.id}）のスケジュールIDが見つかりません。`);
+    for (const taskId of taskIds) {
+      if (!tasks.has(taskId)) {
+        warnings.push(`請求明細（${row.id}）のスケジュールIDが見つかりません: ${taskId}`);
+      }
     }
   }
 

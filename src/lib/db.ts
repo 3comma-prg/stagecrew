@@ -1,6 +1,7 @@
 import type { CalendarConflict, Client, Invoice, InvoiceItem, InvoiceStatus, Project, QuantityUnit, Task, TaxType, UnitPrice } from '@/types';
 import { compareCreatedAt, compareUnitPriceOrder, invoiceTotals } from '@/types';
 import { findUnitPriceAmount, isManualInvoicePrice } from '@/lib/unit-price-match';
+import { primaryInvoiceTaskId } from '@/lib/invoice-line-merge';
 import {
   deferCalendarConflict,
   pullGoogleCalendar,
@@ -235,10 +236,18 @@ export async function listProjects() {
 export async function listTasks(options?: { includeDeleted?: boolean }) {
   const data = await ensure();
   const projects = projectMap(data.projects, data.clients);
-  return data.tasks
+  const tasks = data.tasks
     .filter((task) => options?.includeDeleted || !task.is_deleted)
     .map((task) => ({ ...task, project: projects.get(task.project_id) ?? null }))
     .sort(compareCreatedAt);
+
+  // 表示・フィルタ用: 請求しないのに未請求の行を請求対象外として扱う（永続化は起動時 migrate）
+  return tasks.map((task) => {
+    if (task.is_billable === false && (task.billing_status === 'unbilled' || !task.billing_status)) {
+      return { ...task, billing_status: 'not_billable' as const };
+    }
+    return task;
+  });
 }
 
 export async function listUnitPrices() {
@@ -538,7 +547,7 @@ export async function applyCatalogPricesToDraftInvoices(options?: { skipInvoiceI
     for (let index = 0; index < nextLines.length; index += 1) {
       const line = nextLines[index];
       if (isManualInvoicePrice(line) || !line.task_id) continue;
-      const task = taskById.get(line.task_id);
+      const task = taskById.get(primaryInvoiceTaskId(line.task_id) || '');
       if (!task) continue;
       const catalog = findUnitPriceAmount(clientPrices, task);
       if (catalog <= 0 || catalog === (line.unit_price || 0)) continue;

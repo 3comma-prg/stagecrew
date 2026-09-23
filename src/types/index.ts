@@ -34,8 +34,8 @@ export function compareCreatedAt(a: { created_at?: string | null }, b: { created
 export const DEFAULT_APP_NAME = 'Stagecrew';
 export const DEFAULT_APP_TAGLINE = '業務管理';
 export const DEFAULT_APP_FOOTER = 'スケジュール・請求書管理システム';
-/** 画面表示。Docker タグは alpha_3.1.0（タグに α は使えない）。 */
-export const APP_VERSION_LABEL = 'ver α_3.1.0';
+/** 画面表示。Docker タグは alpha_3.3.0（タグに α は使えない）。 */
+export const APP_VERSION_LABEL = 'ver α_3.3.0';
 
 export interface GoogleIntegrationSettings {
   id: number;
@@ -146,7 +146,7 @@ export interface Task {
 
 export type VenueSize = 'アリーナ' | 'ホール' | 'その他';
 
-export type BillingStatus = 'unbilled' | 'draft' | 'billed' | 'paid';
+export type BillingStatus = 'unbilled' | 'draft' | 'billed' | 'paid' | 'not_billable';
 
 export interface UnitPrice {
   id: string;
@@ -267,6 +267,7 @@ export const BILLING_STATUS_LABELS: Record<BillingStatus, string> = {
   draft: '下書き',
   billed: '請求済',
   paid: '入金済',
+  not_billable: '請求対象外',
 };
 
 export const BILLING_STATUS_COLORS: Record<BillingStatus, string> = {
@@ -274,6 +275,7 @@ export const BILLING_STATUS_COLORS: Record<BillingStatus, string> = {
   draft: 'bg-gray-100 text-gray-700 border-gray-200',
   billed: 'bg-blue-100 text-blue-700 border-blue-200',
   paid: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  not_billable: 'bg-slate-100 text-slate-500 border-slate-200',
 };
 
 export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
@@ -577,15 +579,22 @@ export function billingFromInvoiceStatus(status: string | null | undefined): Bil
 }
 
 export function strongerBilling(current: BillingStatus, next: BillingStatus): BillingStatus {
-  const rank: Record<BillingStatus, number> = { unbilled: 0, draft: 1, billed: 2, paid: 3 };
+  const rank: Record<BillingStatus, number> = {
+    not_billable: -1,
+    unbilled: 0,
+    draft: 1,
+    billed: 2,
+    paid: 3,
+  };
   return rank[next] > rank[current] ? next : current;
 }
 
 export function summarizeBilling(statuses: BillingStatus[]): BillingStatus {
-  if (statuses.length === 0) return 'unbilled';
-  if (statuses.every((status) => status === 'paid')) return 'paid';
-  if (statuses.every((status) => status === 'billed' || status === 'paid')) return 'billed';
-  if (statuses.every((status) => status === 'draft')) return 'draft';
+  const active = statuses.filter((status) => status !== 'not_billable');
+  if (active.length === 0) return statuses.length > 0 ? 'not_billable' : 'unbilled';
+  if (active.every((status) => status === 'paid')) return 'paid';
+  if (active.every((status) => status === 'billed' || status === 'paid')) return 'billed';
+  if (active.every((status) => status === 'draft')) return 'draft';
   return 'unbilled';
 }
 
