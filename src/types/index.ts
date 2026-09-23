@@ -14,6 +14,12 @@ export interface Client {
   tax_rate: number;
   tax_type: TaxType;
   google_calendar_color_id: number | null;
+  /** JSON array of task type names that default to non-billable */
+  non_billable_task_types: string | null;
+  /** schedule_month | show_bundle */
+  billing_timing: string | null;
+  /** Days; shows within this gap merge into one billing group (default 14) */
+  show_group_gap_days: number | null;
   created_at: string;
 }
 
@@ -28,8 +34,8 @@ export function compareCreatedAt(a: { created_at?: string | null }, b: { created
 export const DEFAULT_APP_NAME = 'Stagecrew';
 export const DEFAULT_APP_TAGLINE = '業務管理';
 export const DEFAULT_APP_FOOTER = 'スケジュール・請求書管理システム';
-/** 画面表示。Docker タグは alpha_2.0.0（タグに α は使えない）。 */
-export const APP_VERSION_LABEL = 'ver α_2.0.0';
+/** 画面表示。Docker タグは alpha_3.0.1（タグに α は使えない）。 */
+export const APP_VERSION_LABEL = 'ver α_3.0.1';
 
 export interface GoogleIntegrationSettings {
   id: number;
@@ -96,6 +102,10 @@ export interface Project {
   event_name: string | null;
   client_id: string | null;
   status: ProjectStatus;
+  /** inherit | schedule_month | show_bundle */
+  billing_timing: string | null;
+  /** null = inherit from client */
+  show_group_gap_days: number | null;
   created_at: string;
   client?: Client | null;
 }
@@ -123,6 +133,12 @@ export interface Task {
   venue_size: VenueSize | null;
   notes: string | null;
   billing_status: BillingStatus;
+  /** false = excluded from invoice auto-import */
+  is_billable: boolean;
+  /** inherit | schedule_month | show_bundle */
+  billing_timing: string | null;
+  /** auto | with_previous | new_group — only for 本番 / 仕込み/本番 */
+  show_group_link: string | null;
   google_event_id: string | null;
   created_at: string;
   project?: Project | null;

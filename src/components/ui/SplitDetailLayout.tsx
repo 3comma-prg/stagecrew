@@ -14,6 +14,10 @@ function useMinWidth(query: string) {
   return matches;
 }
 
+/** Viewport-capped independent scroll for list / detail when split is open. */
+const SPLIT_SCROLL =
+  'min-h-0 max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain';
+
 export function SplitDetailLayout({
   selected,
   pane,
@@ -30,10 +34,14 @@ export function SplitDetailLayout({
   children: (opts: { isDesktop: boolean }) => ReactNode;
 }) {
   const isDesktop = useMinWidth(query);
+  const split = selected && isDesktop;
+
   return (
-    <div className={selected && isDesktop ? gridClassName : ''}>
-      <div className={listClassName}>{children({ isDesktop })}</div>
-      {selected && isDesktop ? <div className="sticky top-4 min-w-0">{pane}</div> : null}
+    <div className={split ? gridClassName : ''}>
+      <div className={split ? `${listClassName} sticky top-4 ${SPLIT_SCROLL}` : listClassName}>
+        {children({ isDesktop })}
+      </div>
+      {split ? <div className={`sticky top-4 min-w-0 ${SPLIT_SCROLL}`}>{pane}</div> : null}
     </div>
   );
 }

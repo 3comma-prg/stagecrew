@@ -70,7 +70,7 @@ export function formatCell(column: Column, value: unknown) {
   if (column.type === 'boolean') return value ? 'はい' : 'いいえ';
   if (column.type === 'domestic') return value ? '国内' : '海外';
   if (column.type === 'number') return value;
-  if (column.key === 'status' || column.key === 'time_type' || column.key === 'billing_status' || column.key === 'tax_type') {
+  if (column.key === 'status' || column.key === 'time_type' || column.key === 'billing_status' || column.key === 'tax_type' || column.key === 'billing_timing' || column.key === 'show_group_link') {
     return labelFor(column.key, value);
   }
   return String(value);

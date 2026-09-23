@@ -30,6 +30,13 @@ import { errorFor, inputErrorClass, validateScheduleForm, type FieldError } from
 import { useSessionPref } from '@/lib/session-list-prefs';
 import { useCatalogOptions } from '@/lib/catalog-options';
 import {
+  defaultsFromClient,
+  normalizeBillingTimingSetting,
+  normalizeShowGroupLink,
+  type BillingTimingSetting,
+  type ShowGroupLink,
+} from '@/lib/billing-policy';
+import {
   Plus,
   Pencil,
   Trash2,
@@ -114,8 +121,14 @@ export function TasksPage() {
     venue_size: '' as string,
     notes: '',
     billing_status: 'unbilled' as BillingStatus,
+    is_billable: true,
+    billing_timing: 'inherit' as BillingTimingSetting,
+    show_group_link: 'auto' as ShowGroupLink,
     is_cancelled: false,
   });
+
+  const formProject = projects.find((p) => p.id === form.project_id) || null;
+  const projectTasksForForm = tasks.filter((task) => task.project_id === form.project_id);
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -188,6 +201,9 @@ export function TasksPage() {
       venue_size: '',
       notes: '',
       billing_status: 'unbilled',
+      is_billable: true,
+      billing_timing: 'inherit',
+      show_group_link: 'auto',
       is_cancelled: false,
     });
     setFormErrors([]);
@@ -211,6 +227,9 @@ export function TasksPage() {
       venue_size: task.venue_size || '',
       notes: task.notes || '',
       billing_status: task.billing_status,
+      is_billable: task.is_billable !== false,
+      billing_timing: normalizeBillingTimingSetting(task.billing_timing),
+      show_group_link: normalizeShowGroupLink(task.show_group_link),
       is_cancelled: task.is_cancelled,
     });
     setFormErrors([]);
@@ -234,6 +253,9 @@ export function TasksPage() {
       venue_size: task.venue_size || '',
       notes: task.notes || '',
       billing_status: task.billing_status,
+      is_billable: task.is_billable !== false,
+      billing_timing: normalizeBillingTimingSetting(task.billing_timing),
+      show_group_link: normalizeShowGroupLink(task.show_group_link),
       is_cancelled: false,
     });
     setFormErrors([]);
@@ -260,7 +282,10 @@ export function TasksPage() {
       is_domestic: form.is_domestic,
       venue_size: form.venue_size || null,
       notes: form.notes || null,
-      billing_status: form.billing_status,
+      billing_status: form.is_billable ? form.billing_status : 'unbilled',
+      is_billable: form.is_billable,
+      billing_timing: form.billing_timing,
+      show_group_link: form.show_group_link,
       is_cancelled: form.is_cancelled,
     };
     try {
@@ -617,7 +642,18 @@ export function TasksPage() {
           <FormField label="プロジェクト" required>
             <select
               value={form.project_id}
-              onChange={(e) => setForm({ ...form, project_id: e.target.value })}
+              onChange={(e) => {
+                const project_id = e.target.value;
+                const project = projects.find((p) => p.id === project_id) || null;
+                const defaults = defaultsFromClient(form.task_type, project?.client, project);
+                setForm({
+                  ...form,
+                  project_id,
+                  is_billable: defaults.is_billable,
+                  billing_timing: defaults.billing_timing,
+                  show_group_link: defaults.show_group_link,
+                });
+              }}
               className={`${inputClass} ${inputErrorClass(formErrors, 'project_id')}`}
             >
               <option value="">選択してください</option>
@@ -637,6 +673,10 @@ export function TasksPage() {
             onCancel={() => setModalOpen(false)}
             isNew={!editing}
             formErrors={formErrors}
+            client={formProject?.client}
+            project={formProject}
+            projectTasks={projectTasksForForm}
+            editingTaskId={editing?.id ?? null}
           />
         </div>
       </Modal>

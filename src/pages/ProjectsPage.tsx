@@ -23,6 +23,21 @@ import { SplitDetailLayout } from '@/components/ui/SplitDetailLayout';
 import { AddableSelect } from '@/components/ui/AddableSelect';
 import { inputErrorClass, validateScheduleForm, type FieldError } from '@/lib/schedule-form';
 import { useCatalogOptions } from '@/lib/catalog-options';
+import {
+  BILLING_TIMING_LABELS,
+  SHOW_GROUP_LINK_LABELS,
+  defaultsFromClient,
+  effectiveGapHint,
+  isShowTaskType,
+  normalizeBillingTiming,
+  normalizeBillingTimingSetting,
+  normalizeGapDays,
+  normalizeShowGroupLink,
+  resolveProjectBillingTiming,
+  resolveTaskBilling,
+  type BillingTimingSetting,
+  type ShowGroupLink,
+} from '@/lib/billing-policy';
 import { CancelledBanner, CancelledTitle, cancelledCardClass } from '@/components/CancelledMark';
 import { CollapsedSection } from '@/components/CollapsedSection';
 import { useSessionPref } from '@/lib/session-list-prefs';
@@ -67,6 +82,8 @@ export function ProjectsPage() {
     event_name: '',
     client_id: '',
     status: 'in_progress' as ProjectStatus,
+    billing_timing: 'inherit' as BillingTimingSetting,
+    show_group_gap_days: '' as number | '',
   });
 
   const fetchProjects = useCallback(async () => {
@@ -110,7 +127,14 @@ export function ProjectsPage() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ artist_name: '', event_name: '', client_id: '', status: 'in_progress' });
+    setForm({
+      artist_name: '',
+      event_name: '',
+      client_id: '',
+      status: 'in_progress',
+      billing_timing: 'inherit',
+      show_group_gap_days: '',
+    });
     setFormErrors([]);
     setModalOpen(true);
   };
@@ -122,6 +146,11 @@ export function ProjectsPage() {
       event_name: project.event_name || '',
       client_id: project.client_id || '',
       status: project.status,
+      billing_timing: normalizeBillingTimingSetting(project.billing_timing),
+      show_group_gap_days:
+        project.show_group_gap_days == null || Number.isNaN(Number(project.show_group_gap_days))
+          ? ''
+          : Number(project.show_group_gap_days),
     });
     setFormErrors([]);
     setModalOpen(true);
@@ -134,6 +163,11 @@ export function ProjectsPage() {
       event_name: project.event_name || '',
       client_id: project.client_id || '',
       status: project.status,
+      billing_timing: normalizeBillingTimingSetting(project.billing_timing),
+      show_group_gap_days:
+        project.show_group_gap_days == null || Number.isNaN(Number(project.show_group_gap_days))
+          ? ''
+          : Number(project.show_group_gap_days),
     });
     setFormErrors([]);
     setModalOpen(true);
@@ -153,6 +187,8 @@ export function ProjectsPage() {
       event_name: form.event_name.trim() || null,
       client_id: form.client_id || null,
       status: form.status,
+      billing_timing: form.billing_timing,
+      show_group_gap_days: form.show_group_gap_days === '' ? null : normalizeGapDays(form.show_group_gap_days),
     };
     try {
       await saveProject(payload, editing?.id);
@@ -415,6 +451,69 @@ export function ProjectsPage() {
               ))}
             </select>
           </FormField>
+          <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50/80 p-4">
+            <div>
+              <h4 className="text-sm font-semibold text-slate-800">請求設定</h4>
+              <p className="mt-1 text-xs text-slate-500">この案件の新規スケジュールに適用します。</p>
+            </div>
+            <FormField label="請求タイミング">
+              <div className="flex flex-col gap-2">
+                {(
+                  [
+                    ['inherit', 'クライアントに合わせる'],
+                    ['schedule_month', BILLING_TIMING_LABELS.schedule_month],
+                    ['show_bundle', BILLING_TIMING_LABELS.show_bundle],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setForm({ ...form, billing_timing: value })}
+                    className={`rounded-lg border px-3 py-2 text-left text-sm font-medium transition-all ${
+                      form.billing_timing === value
+                        ? 'border-teal-500 bg-teal-50 text-teal-700'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {label}
+                    {value === 'inherit' && form.client_id ? (
+                      <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                        現在:{' '}
+                        {BILLING_TIMING_LABELS[
+                          normalizeBillingTiming(clients.find((c) => c.id === form.client_id)?.billing_timing)
+                        ]}
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            </FormField>
+            {(form.billing_timing === 'show_bundle' ||
+              (form.billing_timing === 'inherit' &&
+                normalizeBillingTiming(clients.find((c) => c.id === form.client_id)?.billing_timing) ===
+                  'show_bundle')) && (
+              <FormField label="本番をまとめる間隔（日）">
+                <input
+                  type="number"
+                  min={0}
+                  placeholder={`クライアント既定（${normalizeGapDays(
+                    clients.find((c) => c.id === form.client_id)?.show_group_gap_days
+                  )}）`}
+                  value={form.show_group_gap_days}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      show_group_gap_days: e.target.value === '' ? '' : normalizeGapDays(e.target.value),
+                    })
+                  }
+                  className={`${inputClass} w-40`}
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  空欄ならクライアント既定。本番どうしの空きがこの日数以内なら同じ請求にまとめます。各本番の「本番グループ」で個別に変えられます。
+                </p>
+              </FormField>
+            )}
+          </div>
           <FormField label="ステータス">
             <div className="flex gap-2">
               {(['in_progress', 'completed', 'cancelled'] as ProjectStatus[]).map((s) => (
@@ -475,6 +574,9 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
     venue_size: '' as '' | (typeof VENUE_SIZES)[number],
     notes: '',
     billing_status: 'unbilled' as BillingStatus,
+    is_billable: true,
+    billing_timing: 'inherit' as BillingTimingSetting,
+    show_group_link: 'auto' as ShowGroupLink,
     is_cancelled: false,
   });
 
@@ -515,6 +617,7 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
 
   const openCreate = () => {
     const today = new Date().toISOString().slice(0, 10);
+    const defaults = defaultsFromClient(DEFAULT_TASK_TYPE, project.client, project);
     setEditing(null);
     setForm({
       task_type: DEFAULT_TASK_TYPE,
@@ -530,6 +633,9 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
       venue_size: '',
       notes: '',
       billing_status: 'unbilled',
+      is_billable: defaults.is_billable,
+      billing_timing: defaults.billing_timing,
+      show_group_link: defaults.show_group_link,
       is_cancelled: false,
     });
     setFormErrors([]);
@@ -552,6 +658,9 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
       venue_size: task.venue_size || '',
       notes: task.notes || '',
       billing_status: task.billing_status,
+      is_billable: task.is_billable !== false,
+      billing_timing: normalizeBillingTimingSetting(task.billing_timing),
+      show_group_link: normalizeShowGroupLink(task.show_group_link),
       is_cancelled: task.is_cancelled,
     });
     setFormErrors([]);
@@ -574,6 +683,9 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
       venue_size: task.venue_size || '',
       notes: task.notes || '',
       billing_status: task.billing_status,
+      is_billable: task.is_billable !== false,
+      billing_timing: normalizeBillingTimingSetting(task.billing_timing),
+      show_group_link: normalizeShowGroupLink(task.show_group_link),
       is_cancelled: false,
     });
     setFormErrors([]);
@@ -600,7 +712,10 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
       is_domestic: form.is_domestic,
       venue_size: form.venue_size || null,
       notes: form.notes || null,
-      billing_status: form.billing_status,
+      billing_status: form.is_billable ? form.billing_status : 'unbilled',
+      is_billable: form.is_billable,
+      billing_timing: form.billing_timing,
+      show_group_link: form.show_group_link,
       is_cancelled: form.is_cancelled,
     };
     try {
@@ -748,6 +863,10 @@ function TaskPane({ project, onClose }: TaskPaneProps) {
           onCancel={() => setModalOpen(false)}
           isNew={!editing}
           formErrors={formErrors}
+          client={project.client}
+          project={project}
+          projectTasks={tasks}
+          editingTaskId={editing?.id ?? null}
         />
       </Modal>
     </div>
@@ -771,6 +890,9 @@ interface TaskFormProps {
     venue_size: string;
     notes: string;
     billing_status: BillingStatus;
+    is_billable: boolean;
+    billing_timing: BillingTimingSetting;
+    show_group_link: ShowGroupLink;
     is_cancelled: boolean;
   };
   setForm: React.Dispatch<React.SetStateAction<any>>;
@@ -779,13 +901,97 @@ interface TaskFormProps {
   onCancel: () => void;
   isNew?: boolean;
   formErrors?: FieldError[];
+  client?: Client | null;
+  project?: Project | null;
+  projectTasks?: Task[];
+  editingTaskId?: string | null;
 }
 
-export function TaskForm({ form, setForm, onSave, saving, onCancel, isNew = false, formErrors = [] }: TaskFormProps) {
+export function TaskForm({
+  form,
+  setForm,
+  onSave,
+  saving,
+  onCancel,
+  isNew = false,
+  formErrors = [],
+  client = null,
+  project = null,
+  projectTasks = [],
+  editingTaskId = null,
+}: TaskFormProps) {
   const { taskTypes, positions, addTaskType, reorderTaskTypes, addPosition } = useCatalogOptions();
   const isAllDay = form.time_type === 'all_day' || form.time_type === 'multi_day';
   const endDateTouched = useRef(false);
   const endTimeTouched = useRef(false);
+  const gapDays = effectiveGapHint(project, client);
+  const projectTiming = resolveProjectBillingTiming(project, client);
+  const defaults = defaultsFromClient(form.task_type, client, project);
+  const isDefaultBilling =
+    form.is_billable === defaults.is_billable &&
+    form.billing_timing === 'inherit' &&
+    form.show_group_link === 'auto';
+
+  const draftTask = {
+    id: editingTaskId || '__draft__',
+    project_id: project?.id || '',
+    date: form.start_date || null,
+    is_cancelled: form.is_cancelled,
+    is_deleted: false,
+    task_type: form.task_type,
+    time_type: form.time_type,
+    start_date: form.start_date || null,
+    start_time: form.start_time || null,
+    end_date: form.end_date || null,
+    end_time: form.end_time || null,
+    area: form.area || null,
+    location: form.location || null,
+    position: form.position || null,
+    is_domestic: form.is_domestic,
+    venue_size: (form.venue_size || null) as Task['venue_size'],
+    notes: form.notes || null,
+    billing_status: form.billing_status,
+    is_billable: form.is_billable,
+    billing_timing: form.billing_timing,
+    show_group_link: form.show_group_link,
+    google_event_id: null,
+    created_at: '',
+  } satisfies Task;
+
+  const siblings = [
+    ...projectTasks.filter((task) => task.id !== editingTaskId),
+    draftTask,
+  ];
+  const billingPreview = resolveTaskBilling(draftTask, siblings, client, project);
+
+  const applyBillingDefaults = () => {
+    const next = defaultsFromClient(form.task_type, client, project);
+    setForm((f: any) => ({
+      ...f,
+      is_billable: next.is_billable,
+      billing_timing: next.billing_timing,
+      show_group_link: next.show_group_link,
+    }));
+  };
+
+  const handleTaskTypeChange = (task_type: string) => {
+    const nextDefaults = defaultsFromClient(task_type, client, project);
+    const billableDiffers = form.is_billable !== nextDefaults.is_billable;
+    if (billableDiffers) {
+      if (confirm('種別の既定に合わせて「請求する／しない」を更新しますか？')) {
+        setForm((f: any) => ({
+          ...f,
+          task_type,
+          is_billable: nextDefaults.is_billable,
+        }));
+        return;
+      }
+    } else if (isNew) {
+      setForm((f: any) => ({ ...f, task_type, is_billable: nextDefaults.is_billable }));
+      return;
+    }
+    setForm((f: any) => ({ ...f, task_type }));
+  };
 
   const addOneHour = (time: string): string => {
     const [h, m] = time.split(':').map(Number);
@@ -833,7 +1039,7 @@ export function TaskForm({ form, setForm, onSave, saving, onCancel, isNew = fals
       <FormField label="種別">
         <AddableSelect
           value={form.task_type}
-          onChange={(task_type) => setForm((f: any) => ({ ...f, task_type }))}
+          onChange={handleTaskTypeChange}
           options={taskTypes}
           onAdd={addTaskType}
           onReorder={reorderTaskTypes}
@@ -985,18 +1191,139 @@ export function TaskForm({ form, setForm, onSave, saving, onCancel, isNew = fals
             ))}
           </select>
         </FormField>
-        <FormField label="請求状態">
-          <select
-            value={form.billing_status}
-            onChange={(e) => setForm((f: any) => ({ ...f, billing_status: e.target.value as BillingStatus }))}
-            className={inputClass}
+      </div>
+
+      <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50/80 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h4 className="text-sm font-semibold text-slate-800">請求設定</h4>
+            {!isDefaultBilling ? (
+              <p className="mt-0.5 text-xs text-amber-700">既定から変更しています</p>
+            ) : (
+              <p className="mt-0.5 text-xs text-slate-500">クライアント／案件の既定を使っています</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={applyBillingDefaults}
+            className="text-xs font-medium text-teal-700 hover:text-teal-800 hover:underline"
           >
-            <option value="unbilled">未請求</option>
-            <option value="draft">下書き</option>
-            <option value="billed">請求済</option>
-            <option value="paid">入金済</option>
-          </select>
+            既定に戻す
+          </button>
+        </div>
+
+        <FormField label="請求する">
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setForm((f: any) => ({ ...f, is_billable: true }))}
+              className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all ${
+                form.is_billable
+                  ? 'border-teal-500 bg-teal-50 text-teal-700'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              する
+            </button>
+            <button
+              type="button"
+              onClick={() => setForm((f: any) => ({ ...f, is_billable: false }))}
+              className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all ${
+                !form.is_billable
+                  ? 'border-teal-500 bg-teal-50 text-teal-700'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              しない
+            </button>
+          </div>
+          {!form.is_billable ? (
+            <p className="mt-1 text-xs text-slate-500">自動取込の対象外になります。</p>
+          ) : null}
         </FormField>
+
+        {form.is_billable ? (
+          <>
+            <FormField label="請求タイミング">
+              <div className="flex flex-col gap-2">
+                {(
+                  [
+                    ['inherit', '案件に合わせる'],
+                    ['schedule_month', BILLING_TIMING_LABELS.schedule_month],
+                    ['show_bundle', BILLING_TIMING_LABELS.show_bundle],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setForm((f: any) => ({ ...f, billing_timing: value }))}
+                    className={`rounded-lg border px-3 py-2 text-left text-sm font-medium transition-all ${
+                      form.billing_timing === value
+                        ? 'border-teal-500 bg-teal-50 text-teal-700'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {label}
+                    {value === 'inherit' ? (
+                      <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                        現在: {BILLING_TIMING_LABELS[projectTiming]}
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            </FormField>
+
+            {isShowTaskType(form.task_type) &&
+            (form.billing_timing === 'show_bundle' ||
+              (form.billing_timing === 'inherit' && projectTiming === 'show_bundle')) ? (
+              <FormField label="本番グループ">
+                <div className="flex flex-col gap-2">
+                  {(Object.keys(SHOW_GROUP_LINK_LABELS) as ShowGroupLink[]).map((link) => (
+                    <button
+                      key={link}
+                      type="button"
+                      onClick={() => setForm((f: any) => ({ ...f, show_group_link: link }))}
+                      className={`rounded-lg border px-3 py-2 text-left text-sm font-medium transition-all ${
+                        form.show_group_link === link
+                          ? 'border-teal-500 bg-teal-50 text-teal-700'
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      {SHOW_GROUP_LINK_LABELS[link]}
+                      {link === 'auto' ? (
+                        <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                          空きが {gapDays} 日以内なら前の本番と同じ請求にまとめます
+                        </span>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              </FormField>
+            ) : null}
+          </>
+        ) : null}
+
+        <p className="rounded-md bg-white px-3 py-2 text-xs text-slate-600 ring-1 ring-slate-200">
+          {billingPreview.label}
+        </p>
+
+        {form.is_billable ? (
+          <FormField label="請求状態">
+            <select
+              value={form.billing_status}
+              onChange={(e) => setForm((f: any) => ({ ...f, billing_status: e.target.value as BillingStatus }))}
+              className={inputClass}
+            >
+              <option value="unbilled">未請求</option>
+              <option value="draft">下書き</option>
+              <option value="billed">請求済</option>
+              <option value="paid">入金済</option>
+            </select>
+          </FormField>
+        ) : (
+          <p className="text-xs text-slate-500">請求状態: 請求対象外</p>
+        )}
       </div>
 
       <FormField label="備考">

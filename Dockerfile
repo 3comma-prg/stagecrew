@@ -16,7 +16,7 @@ RUN npm run build
 
 FROM node:20-alpine AS production
 
-LABEL org.opencontainers.image.version="alpha_2.0.0" \
+LABEL org.opencontainers.image.version="alpha_3.0.1" \
       org.opencontainers.image.title="stagecrew"
 
 WORKDIR /app

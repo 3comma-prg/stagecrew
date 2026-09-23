@@ -37,6 +37,9 @@ export const SHEETS: SheetSpec[] = [
       { key: 'tax_rate', header: '消費税率（%）', type: 'number', fallback: 10, aliases: ['消費税率'] },
       { key: 'tax_type', header: '税区分', type: 'string', fallback: 'exclusive', aliases: ['消費税区分', '内外税'] },
       { key: 'google_calendar_color_id', header: 'Googleカレンダーの色', type: 'number', fallback: null, aliases: ['カレンダー色'] },
+      { key: 'non_billable_task_types', header: '請求しない種別', type: 'string', fallback: '', aliases: ['非請求種別'] },
+      { key: 'billing_timing', header: '請求タイミング', type: 'string', fallback: 'schedule_month', aliases: ['請求のタイミング'] },
+      { key: 'show_group_gap_days', header: '本番まとめ間隔（日）', type: 'number', fallback: 14, aliases: ['本番グループ間隔'] },
       createdAt,
     ],
   },
@@ -50,6 +53,8 @@ export const SHEETS: SheetSpec[] = [
       { key: 'event_name', header: 'イベント名', type: 'string' },
       { key: 'client_id', header: 'クライアントID', type: 'string' },
       { key: 'status', header: 'ステータス', type: 'string', fallback: 'in_progress' },
+      { key: 'billing_timing', header: '請求タイミング', type: 'string', fallback: 'inherit', aliases: ['請求のタイミング'] },
+      { key: 'show_group_gap_days', header: '本番まとめ間隔（日）', type: 'number', fallback: null, aliases: ['本番グループ間隔'] },
       createdAt,
     ],
   },
@@ -75,6 +80,9 @@ export const SHEETS: SheetSpec[] = [
       { key: 'venue_size', header: '規模', type: 'string', aliases: ['会場規模', '会場の大きさ'] },
       { key: 'notes', header: '備考', type: 'string' },
       { key: 'billing_status', header: '請求状態', type: 'string', fallback: 'unbilled' },
+      { key: 'is_billable', header: '請求する', type: 'boolean', fallback: true, aliases: ['請求対象'] },
+      { key: 'billing_timing', header: '請求タイミング', type: 'string', fallback: 'inherit', aliases: ['請求のタイミング'] },
+      { key: 'show_group_link', header: '本番グループ', type: 'string', fallback: 'auto', aliases: ['請求グループ'] },
       { key: 'google_event_id', header: 'GoogleイベントID', type: 'string', aliases: ['カレンダーイベントID'] },
       createdAt,
     ],
@@ -150,6 +158,19 @@ const ENUMS: Record<string, Record<string, string>> = {
   time_type: { 終日: 'all_day', 時間限定: 'time_limited', 複数日: 'multi_day' },
   billing_status: { 未請求: 'unbilled', 下書き: 'draft', 請求済: 'billed', 入金済: 'paid' },
   tax_type: { 外税: 'exclusive', 内税: 'inclusive', 税込み: 'inclusive', 税込: 'inclusive' },
+  billing_timing: {
+    日程の月で請求: 'schedule_month',
+    本番まとめ: 'show_bundle',
+    クライアントに合わせる: 'inherit',
+    案件に合わせる: 'inherit',
+    継承: 'inherit',
+  },
+  show_group_link: {
+    自動: 'auto',
+    '自動（間隔ルール）': 'auto',
+    前の本番とまとめる: 'with_previous',
+    ここで別の請求にする: 'new_group',
+  },
 };
 
 const ENUM_OUT: Record<string, Record<string, string>> = Object.fromEntries(

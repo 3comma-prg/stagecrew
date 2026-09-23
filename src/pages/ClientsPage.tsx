@@ -2,6 +2,15 @@ import { Fragment, useEffect, useState, useCallback } from 'react';
 import { deleteClient, deleteUnitPrice, listClients, listUnitPrices, saveClient, saveUnitPrice, applyCatalogPricesToDraftInvoices } from '@/lib/db';
 import type { Client, UnitPrice, VenueSize, TaxType } from '@/types';
 import { DEFAULT_TASK_TYPE, VENUE_SIZES, GOOGLE_CALENDAR_COLORS, clientName, normalizeTaxType, taxSettingLabel } from '@/types';
+import {
+  BILLING_TIMING_LABELS,
+  DEFAULT_SHOW_GROUP_GAP_DAYS,
+  normalizeBillingTiming,
+  normalizeGapDays,
+  parseNonBillableTaskTypes,
+  serializeNonBillableTaskTypes,
+  type BillingTiming,
+} from '@/lib/billing-policy';
 import { Modal } from '@/components/ui/Modal';
 import { FormErrorList, FormField, fieldErrorClass, inputClass } from '@/components/ui/FormField';
 import { AddableSelect } from '@/components/ui/AddableSelect';
@@ -38,7 +47,11 @@ export function ClientsPage() {
     tax_rate: 10,
     tax_type: 'exclusive' as TaxType,
     google_calendar_color_id: null as number | null,
+    non_billable_task_types: [] as string[],
+    billing_timing: 'schedule_month' as BillingTiming,
+    show_group_gap_days: DEFAULT_SHOW_GROUP_GAP_DAYS,
   });
+  const { taskTypes } = useCatalogOptions();
 
   const fetchClients = useCallback(async () => {
     setLoading(true);
@@ -70,6 +83,9 @@ export function ClientsPage() {
       tax_rate: 10,
       tax_type: 'exclusive' as TaxType,
       google_calendar_color_id: null,
+      non_billable_task_types: [],
+      billing_timing: 'schedule_month',
+      show_group_gap_days: DEFAULT_SHOW_GROUP_GAP_DAYS,
     });
     setFormErrors([]);
     setPostalMessage('');
@@ -94,6 +110,9 @@ export function ClientsPage() {
         client.google_calendar_color_id && client.google_calendar_color_id > 0
           ? client.google_calendar_color_id
           : null,
+      non_billable_task_types: parseNonBillableTaskTypes(client.non_billable_task_types),
+      billing_timing: normalizeBillingTiming(client.billing_timing),
+      show_group_gap_days: normalizeGapDays(client.show_group_gap_days),
     });
     setFormErrors([]);
     setPostalMessage('');
@@ -141,6 +160,9 @@ export function ClientsPage() {
       tax_rate: form.tax_rate,
       tax_type: form.tax_type,
       google_calendar_color_id: form.google_calendar_color_id,
+      non_billable_task_types: serializeNonBillableTaskTypes(form.non_billable_task_types),
+      billing_timing: form.billing_timing,
+      show_group_gap_days: normalizeGapDays(form.show_group_gap_days),
     };
     try {
       await saveClient(payload, editing?.id);
@@ -430,6 +452,89 @@ export function ClientsPage() {
               ))}
             </div>
           </FormField>
+
+          <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50/80 p-4">
+            <div>
+              <h4 className="text-sm font-semibold text-slate-800">請求の既定</h4>
+              <p className="mt-1 text-xs text-slate-500">
+                新規スケジュール作成時にコピーします。既存スケジュールは自動では変わりません。
+              </p>
+            </div>
+            <FormField label="請求しない種別">
+              <div className="flex flex-wrap gap-2">
+                {taskTypes.map((type) => {
+                  const checked = form.non_billable_task_types.includes(type);
+                  return (
+                    <label
+                      key={type}
+                      className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all ${
+                        checked
+                          ? 'border-teal-500 bg-teal-50 text-teal-700'
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="sr-only"
+                        checked={checked}
+                        onChange={() =>
+                          setForm((current) => ({
+                            ...current,
+                            non_billable_task_types: checked
+                              ? current.non_billable_task_types.filter((item) => item !== type)
+                              : [...current.non_billable_task_types, type],
+                          }))
+                        }
+                      />
+                      {type}
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-xs text-slate-500">オンにした種別は、新規スケジュールで「請求しない」になります。</p>
+            </FormField>
+            <FormField label="請求タイミングの既定">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                {(['schedule_month', 'show_bundle'] as BillingTiming[]).map((timing) => (
+                  <button
+                    key={timing}
+                    type="button"
+                    onClick={() => setForm({ ...form, billing_timing: timing })}
+                    className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all ${
+                      form.billing_timing === timing
+                        ? 'border-teal-500 bg-teal-50 text-teal-700'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {BILLING_TIMING_LABELS[timing]}
+                  </button>
+                ))}
+              </div>
+              {form.billing_timing === 'show_bundle' ? (
+                <p className="mt-1 text-xs text-slate-500">
+                  同じ案件の本番を間隔でグループ化し、グループの最終月に期間全体をまとめて載せます。通常は案件側で上書きします。
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500">日程が複数月にかかる場合は、月ごとに分けて請求します。</p>
+              )}
+            </FormField>
+            {form.billing_timing === 'show_bundle' ? (
+              <FormField label="本番をまとめる間隔（日）">
+                <input
+                  type="number"
+                  min={0}
+                  value={form.show_group_gap_days}
+                  onChange={(e) =>
+                    setForm({ ...form, show_group_gap_days: normalizeGapDays(e.target.value) })
+                  }
+                  className={`${inputClass} w-32`}
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  本番どうしの空きがこの日数以内なら同じ請求にまとめ、超えたら分けます（既定 {DEFAULT_SHOW_GROUP_GAP_DAYS}日）。各本番で個別に上書きもできます。
+                </p>
+              </FormField>
+            ) : null}
+          </div>
 
           <FormField label="消費税率（%）" required>
             <TaxRateField

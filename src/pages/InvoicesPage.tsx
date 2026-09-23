@@ -36,6 +36,10 @@ import {
   normalizeTaxType,
 } from '@/types';
 import type { TaxType } from '@/types';
+import {
+  importPeriodForBillingMonth,
+  resolveTaskBilling,
+} from '@/lib/billing-policy';
 import { checkDrivePdfExists, createInvoiceGmailDraft, ensureInvoicePdf, fetchInvoicePdf, invoicePdfFilename, saveInvoicePdfToDriveFolder, suggestRenamedPdfFilename, type InvoicePdfRequest } from '@/lib/invoice-pdf';
 import { InvoicePdfPages } from '@/components/InvoicePdfPages';
 import { loadSettings } from '@/lib/local-store';
@@ -217,7 +221,8 @@ function taskExceedsMonth(task: Task, billingMonth: string): boolean {
 function correctCrossMonthLine(
   item: InvoiceItem & { task?: Task | null },
   billingMonth: string,
-  priceList: UnitPrice[]
+  priceList: UnitPrice[],
+  allTasks: Task[] = []
 ): { description: string; quantity: number; quantity_unit: QuantityUnit; unit_price: number; corrected: boolean } {
   const quantityUnit = quantityUnitOf(item.quantity_unit);
   const storedQuantity = item.quantity ?? (item.task ? getTaskDayCount(item.task) : 1);
@@ -228,7 +233,44 @@ function correctCrossMonthLine(
         ? Math.round(item.amount / storedQuantity)
         : item.amount;
 
-  if (!item.task || quantityUnit !== '日' || !taskExceedsMonth(item.task, billingMonth)) {
+  if (!item.task || quantityUnit !== '日') {
+    return {
+      description: withItemDate(item.description, item.task),
+      quantity: storedQuantity,
+      quantity_unit: quantityUnit,
+      unit_price: storedUnitPrice,
+      corrected: false,
+    };
+  }
+
+  const projectTasks =
+    allTasks.length > 0
+      ? allTasks.filter((task) => task.project_id === item.task!.project_id)
+      : [item.task];
+  const periodInfo = importPeriodForBillingMonth(
+    item.task,
+    billingMonth,
+    projectTasks,
+    item.task.project?.client,
+    item.task.project
+  );
+
+  if (periodInfo?.wholePeriod) {
+    const quantity = inclusiveDayCount(periodInfo.start, periodInfo.end);
+    const registered = findUnitPrice(priceList, item.task);
+    const unitPrice = item.price_manual ? storedUnitPrice : registered > 0 ? registered : storedUnitPrice;
+    const description = descriptionForPeriod(item.description, item.task, periodInfo);
+    const corrected = quantity !== storedQuantity || unitPrice !== storedUnitPrice || description !== item.description;
+    return {
+      description,
+      quantity,
+      quantity_unit: quantityUnit,
+      unit_price: unitPrice,
+      corrected,
+    };
+  }
+
+  if (!taskExceedsMonth(item.task, billingMonth)) {
     return {
       description: withItemDate(item.description, item.task),
       quantity: storedQuantity,
@@ -733,7 +775,6 @@ export function InvoicesPage() {
   const handleAutoImport = async () => {
     if (!form.client_id || !form.billing_month) return;
 
-    const bounds = monthBounds(form.billing_month);
     const tasks = await listTasks();
     const prices = await listUnitPrices();
     const billedItems = (await listInvoiceItems()).filter((item) => item.task_id);
@@ -745,46 +786,64 @@ export function InvoicesPage() {
         : form.tax_rate || 10;
 
     const taskList = tasks.filter((task) => {
-      if (task.is_cancelled) return false;
-      const range = taskDateRange(task);
-      if (!range || range.start >= bounds.endExclusive) return false;
-      return !range.end || range.end >= bounds.start;
+      if (task.is_cancelled || task.is_deleted) return false;
+      return task.project?.client_id === form.client_id;
     });
     const priceList = prices.filter((price) => price.client_id === form.client_id);
-    const alreadyBilled = new Set(
-      (billedItems || [])
-        .filter((item) => {
-          const invoice = asInvoice(item.invoice);
-          return invoice?.billing_month === form.billing_month && item.invoice_id !== editing?.id;
-        })
-        .map((item) => item.task_id)
-    );
 
-    let skipped = 0;
+    let skippedBilled = 0;
+    let skippedNotBillable = 0;
+    let skippedWaiting = 0;
     const monthTasks: Task[] = [];
     const exclusiveItems: EditInvoiceItem[] = [];
     const inclusiveItems: EditInvoiceItem[] = [];
+
     for (const task of taskList) {
-      if (task.project?.client_id !== form.client_id) continue;
-      const range = taskDateRange(task);
-      if (!range) continue;
-      const period = clipToMonth(range.start, range.end, form.billing_month);
-      if (!period) continue;
-      monthTasks.push(task);
-      if (alreadyBilled.has(task.id)) {
-        skipped += 1;
+      const projectTasks = tasks.filter((row) => row.project_id === task.project_id);
+      const client = selected || task.project?.client || null;
+      const periodInfo = importPeriodForBillingMonth(
+        task,
+        form.billing_month,
+        projectTasks,
+        client,
+        task.project
+      );
+      if (!periodInfo) {
+        const resolved = resolveTaskBilling(task, projectTasks, client, task.project);
+        if (resolved.kind === 'not_billable') skippedNotBillable += 1;
+        else if (resolved.kind === 'waiting_show') skippedWaiting += 1;
         continue;
       }
-      const line = lineFromTask(task, priceList, period);
+
+      monthTasks.push(task);
+
+      const onOtherInvoice = billedItems.some((item) => {
+        if (item.task_id !== task.id || item.invoice_id === editing?.id) return false;
+        const invoice = asInvoice(item.invoice);
+        if (!invoice) return false;
+        if (periodInfo.wholePeriod) return true;
+        return invoice.billing_month === form.billing_month;
+      });
+      if (onOtherInvoice) {
+        skippedBilled += 1;
+        continue;
+      }
+
+      const line = lineFromTask(task, priceList, { start: periodInfo.start, end: periodInfo.end });
       const taxType = taxTypeForTask(priceList, task, fallbackTax);
       if (taxType === 'inclusive') inclusiveItems.push(line);
       else exclusiveItems.push(line);
     }
 
+    const skipped = skippedBilled;
     if (exclusiveItems.length === 0 && inclusiveItems.length === 0) {
+      const extras: string[] = [];
+      if (skippedBilled > 0) extras.push(`請求書済み ${skippedBilled}件`);
+      if (skippedNotBillable > 0) extras.push(`請求対象外 ${skippedNotBillable}件`);
+      if (skippedWaiting > 0) extras.push(`本番待ち ${skippedWaiting}件`);
       alert(
-        skipped > 0
-          ? 'この月の分は、すでに別の請求書に含まれています。'
+        extras.length
+          ? `取り込むスケジュールがありません。（${extras.join(' / ')}）`
           : '該当するスケジュールが見つかりませんでした。'
       );
       return;
@@ -800,8 +859,14 @@ export function InvoicesPage() {
       }));
       setAutoImported(true);
       const notices: string[] = [];
-      if (skipped > 0) {
-        notices.push(`${skipped}件はすでにこの月の請求書に含まれているため、取り込みませんでした。`);
+      if (skippedBilled > 0) {
+        notices.push(`${skippedBilled}件はすでに請求書に含まれているため、取り込みませんでした。`);
+      }
+      if (skippedNotBillable > 0) {
+        notices.push(`請求対象外 ${skippedNotBillable}件は取り込みませんでした。`);
+      }
+      if (skippedWaiting > 0) {
+        notices.push(`本番待ち ${skippedWaiting}件は取り込みませんでした。`);
       }
       if (otherCount > 0) {
         const otherLabel = taxLabelForInvoice(taxType === 'inclusive' ? 'exclusive' : 'inclusive');
@@ -892,11 +957,11 @@ export function InvoicesPage() {
         }
         setModalOpen(false);
         fetchInvoices();
-        alert(
-          skipped > 0
-            ? `外税用・税込み用の請求書を作成しました。\n${skipped}件はすでにこの月の請求書に含まれているため、取り込みませんでした。`
-            : '外税用・税込み用の請求書を作成しました。'
-        );
+        const notes: string[] = ['外税用・税込み用の請求書を作成しました。'];
+        if (skippedBilled > 0) notes.push(`${skippedBilled}件はすでに請求書に含まれているため、取り込みませんでした。`);
+        if (skippedNotBillable > 0) notes.push(`請求対象外 ${skippedNotBillable}件は取り込みませんでした。`);
+        if (skippedWaiting > 0) notes.push(`本番待ち ${skippedWaiting}件は取り込みませんでした。`);
+        alert(notes.join('\n'));
       } catch (error) {
         alert(error instanceof Error ? error.message : '請求書の作成に失敗しました。');
       }
@@ -1940,7 +2005,7 @@ export function InvoicesPage() {
 
           <div className="mb-4 flex flex-col gap-3 rounded-lg border border-teal-100 bg-teal-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-teal-700">
-              クライアントと請求月を選ぶと、その月の日数だけ取り込めます。月をまたぐ日程も、この請求月の分だけ計上します
+              クライアントと請求月を選ぶと、請求するスケジュールを取り込みます。通常は月ごとに分けて計上し、本番まとめの案件は期間全体をその請求月に載せます。請求対象外・本番待ちは含みません。
             </p>
             <div className="flex shrink-0 flex-wrap gap-2">
               <button

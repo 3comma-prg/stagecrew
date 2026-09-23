@@ -20,7 +20,7 @@ function sqlType(column: Column) {
   return 'TEXT';
 }
 
-function createTableSql(key: SheetKey) {
+function createTableSql(key: SheetKey, tableName = key) {
   const spec = SHEET_BY_KEY[key];
   const cols = spec.columns
     .map((column) => {
@@ -28,7 +28,7 @@ function createTableSql(key: SheetKey) {
       return `"${column.key}" ${sqlType(column)}`;
     })
     .join(', ');
-  return `CREATE TABLE IF NOT EXISTS "${key}" (${cols})`;
+  return `CREATE TABLE IF NOT EXISTS "${tableName}" (${cols})`;
 }
 
 function toSqlValue(column: Column, value: unknown): SqlValue {
@@ -69,16 +69,43 @@ function persist() {
   writeFileSync(dbPath, Buffer.from(db.export()));
 }
 
+function tableColumnNames(database: Database, tableName: string): string[] {
+  const info = database.exec(`PRAGMA table_info("${tableName}")`);
+  return (info[0]?.values || []).map((row) => String(row[1]));
+}
+
+/** ALTER TABLE で末尾に付いた列を、schema.ts の定義順に並べ替える */
+function reorderTableIfNeeded(database: Database, key: SheetKey) {
+  const expected = SHEET_BY_KEY[key].columns.map((column) => column.key);
+  const actual = tableColumnNames(database, key);
+  if (actual.length === expected.length && actual.every((name, index) => name === expected[index])) {
+    return;
+  }
+
+  const temp = `${key}__reorder`;
+  database.run(`DROP TABLE IF EXISTS "${temp}"`);
+  database.run(createTableSql(key, temp).replace('CREATE TABLE IF NOT EXISTS', 'CREATE TABLE'));
+
+  const existing = new Set(actual);
+  const destCols = expected.map((name) => `"${name}"`).join(', ');
+  const selectCols = expected
+    .map((name) => (existing.has(name) ? `"${name}"` : 'NULL'))
+    .join(', ');
+  database.run(`INSERT INTO "${temp}" (${destCols}) SELECT ${selectCols} FROM "${key}"`);
+  database.run(`DROP TABLE "${key}"`);
+  database.run(`ALTER TABLE "${temp}" RENAME TO "${key}"`);
+}
+
 function migrate(database: Database) {
-  database.run('PRAGMA foreign_keys = ON');
+  database.run('PRAGMA foreign_keys = OFF');
   for (const sheet of SHEETS) {
     database.run(createTableSql(sheet.key));
-    const info = database.exec(`PRAGMA table_info("${sheet.key}")`);
-    const existing = new Set((info[0]?.values || []).map((row) => String(row[1])));
+    const existing = new Set(tableColumnNames(database, sheet.key));
     for (const column of sheet.columns) {
       if (existing.has(column.key)) continue;
       database.run(`ALTER TABLE "${sheet.key}" ADD COLUMN "${column.key}" ${sqlType(column)}`);
     }
+    reorderTableIfNeeded(database, sheet.key);
   }
   database.run('CREATE INDEX IF NOT EXISTS idx_projects_client ON projects(client_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)');
@@ -86,6 +113,7 @@ function migrate(database: Database) {
   database.run('CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_invoice_items_task ON invoice_items(task_id)');
+  database.run('PRAGMA foreign_keys = ON');
 }
 
 export function databasePath(env: Env) {
