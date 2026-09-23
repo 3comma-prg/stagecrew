@@ -278,11 +278,23 @@ export async function deleteClient(id: string) {
 }
 
 export async function saveProject(payload: Record<string, unknown>, id?: string) {
+  const previous = id ? (await ensure()).projects.find((project) => project.id === id) : undefined;
+  const becomingCancelled = Boolean(id) && payload.status === 'cancelled' && previous?.status !== 'cancelled';
   const saved = id
     ? await updateRow<Project>('projects', id, payload)
     : await createRow<Project>('projects', payload);
   await refresh(['projects']);
+  if (becomingCancelled && id) await cancelSchedulesForProject(id);
   return saved;
+}
+
+async function cancelSchedulesForProject(projectId: string) {
+  const tasks = (await ensure()).tasks.filter(
+    (task) => task.project_id === projectId && !task.is_cancelled && !task.is_deleted
+  );
+  for (const task of tasks) {
+    await saveTask({ is_cancelled: true }, task.id);
+  }
 }
 
 export async function deleteProject(id: string) {
