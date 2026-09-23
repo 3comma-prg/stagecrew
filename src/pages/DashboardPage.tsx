@@ -36,7 +36,9 @@ export function DashboardPage({ onNavigate }: DashboardProps) {
     clientCount: 0,
     invoiceCount: 0,
     unpaidAmount: 0,
-    monthlyRevenue: 0,
+    lifetimeIncome: 0,
+    lastYearIncome: 0,
+    thisYearIncome: 0,
   });
   const [recentTasks, setRecentTasks] = useState<(Task & { project?: Project | null })[]>([]);
   const [recentProjects, setRecentProjects] = useState<(Project & { client?: Client | null })[]>([]);
@@ -45,7 +47,9 @@ export function DashboardPage({ onNavigate }: DashboardProps) {
   useEffect(() => {
     const load = async () => {
       const today = new Date().toISOString().slice(0, 10);
-      const currentMonth = new Date().toISOString().slice(0, 7);
+      const now = new Date();
+      const thisYear = String(now.getFullYear());
+      const lastYear = String(now.getFullYear() - 1);
 
       const [projectList, taskList, clientList, invoiceList] = await Promise.all([
         listProjects(),
@@ -61,6 +65,10 @@ export function DashboardPage({ onNavigate }: DashboardProps) {
         .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
         .slice(0, 5);
 
+      const paidInvoices = invoiceList.filter((invoice) => invoice.status === 'paid');
+      const sumAmounts = (invoices: Invoice[]) =>
+        invoices.reduce((sum, invoice) => sum + invoice.total_amount, 0);
+
       setStats({
         projectCount: projectList.length,
         activeProjects: projectList.filter((p) => p.status === 'in_progress').length,
@@ -68,12 +76,14 @@ export function DashboardPage({ onNavigate }: DashboardProps) {
         upcomingTasks: taskList.filter((t) => (t.date || t.start_date || '') >= today && !t.is_cancelled).length,
         clientCount: clientList.length,
         invoiceCount: invoiceList.length,
-        unpaidAmount: invoiceList
-          .filter((i) => i.status !== 'paid')
-          .reduce((sum, i) => sum + i.total_amount, 0),
-        monthlyRevenue: invoiceList
-          .filter((i) => i.billing_month === currentMonth && i.status === 'paid')
-          .reduce((sum, i) => sum + i.total_amount, 0),
+        unpaidAmount: sumAmounts(invoiceList.filter((invoice) => invoice.status !== 'paid')),
+        lifetimeIncome: sumAmounts(paidInvoices),
+        lastYearIncome: sumAmounts(
+          paidInvoices.filter((invoice) => (invoice.billing_month || '').startsWith(lastYear)),
+        ),
+        thisYearIncome: sumAmounts(
+          paidInvoices.filter((invoice) => (invoice.billing_month || '').startsWith(thisYear)),
+        ),
       });
 
       setRecentTasks(recentTasksData);
@@ -117,11 +127,38 @@ export function DashboardPage({ onNavigate }: DashboardProps) {
       page: 'clients' as PageKey,
     },
     {
-      label: '未入金額',
+      label: '請求書発行数',
+      value: stats.invoiceCount,
+      icon: <FileText className="h-5 w-5" />,
+      color: 'text-slate-600 bg-slate-100',
+      page: 'invoices' as PageKey,
+    },
+  ];
+
+  const incomeCards = [
+    {
+      label: '過去の総収入',
+      value: formatYen(stats.lifetimeIncome),
+      icon: <TrendingUp className="h-5 w-5" />,
+      color: 'text-emerald-600 bg-emerald-50',
+    },
+    {
+      label: '昨年の総収入',
+      value: formatYen(stats.lastYearIncome),
+      icon: <TrendingUp className="h-5 w-5" />,
+      color: 'text-teal-600 bg-teal-50',
+    },
+    {
+      label: '今年の総収入',
+      value: formatYen(stats.thisYearIncome),
+      icon: <TrendingUp className="h-5 w-5" />,
+      color: 'text-blue-600 bg-blue-50',
+    },
+    {
+      label: '未入金',
       value: formatYen(stats.unpaidAmount),
       icon: <AlertCircle className="h-5 w-5" />,
       color: 'text-red-600 bg-red-50',
-      page: 'invoices' as PageKey,
     },
   ];
 
@@ -272,30 +309,20 @@ export function DashboardPage({ onNavigate }: DashboardProps) {
         </div>
       </div>
 
-      {/* Revenue summary */}
-      <div className="mt-6 grid gap-4 sm:grid-cols-2">
-        <div className="card p-4 md:p-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-              <TrendingUp className="h-6 w-6" />
+      <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {incomeCards.map((card) => (
+          <button
+            key={card.label}
+            onClick={() => onNavigate('invoices')}
+            className="card group p-5 text-left transition-all hover:shadow-md"
+          >
+            <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${card.color}`}>
+              {card.icon}
             </div>
-            <div>
-              <p className="text-sm text-slate-500">今月の売上（入金済）</p>
-              <p className="text-2xl font-bold text-slate-900">{formatYen(stats.monthlyRevenue)}</p>
-            </div>
-          </div>
-        </div>
-        <div className="card p-4 md:p-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-              <FileText className="h-6 w-6" />
-            </div>
-            <div>
-              <p className="text-sm text-slate-500">請求書発行数</p>
-              <p className="text-2xl font-bold text-slate-900">{stats.invoiceCount}件</p>
-            </div>
-          </div>
-        </div>
+            <p className="mt-4 text-2xl font-bold text-slate-900">{card.value}</p>
+            <p className="mt-1 text-sm text-slate-500">{card.label}</p>
+          </button>
+        ))}
       </div>
     </div>
   );

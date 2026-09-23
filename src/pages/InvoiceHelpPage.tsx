@@ -30,7 +30,8 @@ export function InvoiceHelpPage({ onNavigate }: Props) {
         <section className="card p-4 md:p-6">
           <h2 className="text-base font-semibold text-slate-900">雛形の用意</h2>
           <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-slate-700">
-            <li>Googleスプレッドシートで雛形を作ります。税区分ごとに「外税」「内税」を用意します。明細が15行以内用と、16行以上用（請求書＋明細書の2シート）を分けてください。</li>
+            <li>Googleスプレッドシートで雛形を作ります。税区分ごとに「外税」「内税」、さらに非課税明細を含む外税用を用意します。明細が15行以内用と、16行以上用（請求書＋明細書の2シート）を分けてください。</li>
+            <li>金額・単価・小計・税額・合計・非課税額はアプリが「￥」付き文字列で差し込みます。テンプレ側のセルは文字列（通貨書式なし）にし、セル内に固定の￥は置かないでください。消費税率は「10%」のように％付きで差し込まれます。</li>
             <li>15行以内用は請求書シートだけです。明細の5つは15行連続で置き、{'{{小計}}'} はその下に置きます。行は増やしません。</li>
             <li>16行以上用は1つのスプレッドシートに2シート（1:請求書、2:明細書）を置きます。請求書側の明細は15行固定（先頭に「別紙明細書のとおり」）、明細書側は30行固定です。行は増やしません。</li>
             <li>
@@ -62,6 +63,13 @@ export function InvoiceHelpPage({ onNavigate }: Props) {
               一覧・プレビューから「PDF作成」「メール作成」「PDF作成 + メール下書き」を選べます。メール作成はPDFを添付したGmail下書きのみ作ります。
             </li>
           </ul>
+        </section>
+
+        <section className="card p-4 md:p-6">
+          <h2 className="text-base font-semibold text-slate-900">非課税あり（外税）</h2>
+          <p className="mt-2 text-sm leading-relaxed text-slate-700">
+            交通費など非課税明細を含む外税請求書は、通常の外税テンプレートとは別URLを設定します。合計欄に{'{{課税小計}}'}・{'{{非課税額}}'}・{'{{消費税額}}'}・{'{{合計金額}}'}を置き、明細の金額は非課税行が{'￥…(※)'}形式になります。テンプレート側に「※は消費税非課税」などの注記を置くと分かりやすいです。
+          </p>
         </section>
 
         <section className="card p-4 md:p-6">

@@ -129,6 +129,7 @@ export type MergeableLine = {
   task?: Task | null;
   period?: DateRange | null;
   price_manual?: boolean;
+  tax_exempt?: boolean;
   id?: string | null;
   sort_order?: number | null;
 };
@@ -205,6 +206,7 @@ export function mergeLinesIntoOne<T extends MergeableLine>(
     task: first.task,
     period: mergedPeriod,
     price_manual: sorted.some((line) => line.price_manual) || !allTaskIds.length,
+    tax_exempt: sorted.every((line) => Boolean(line.tax_exempt)),
     sort_order: first.sort_order ?? null,
   };
 }

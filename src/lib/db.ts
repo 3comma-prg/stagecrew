@@ -1,5 +1,5 @@
 import type { CalendarConflict, Client, Invoice, InvoiceItem, InvoiceStatus, Project, QuantityUnit, Task, TaxType, UnitPrice } from '@/types';
-import { compareCreatedAt, compareUnitPriceOrder, invoiceTotals } from '@/types';
+import { compareCreatedAt, compareUnitPriceOrder, invoiceTotals, lineSumsByTax } from '@/types';
 import { findUnitPriceAmount, isManualInvoicePrice } from '@/lib/unit-price-match';
 import { primaryInvoiceTaskId } from '@/lib/invoice-line-merge';
 import {
@@ -508,6 +508,7 @@ export async function replaceInvoiceItems(
     amount: number;
     sort_order: number;
     price_manual?: boolean;
+    tax_exempt?: boolean;
   }[]
 ) {
   await request('/api/sheets/invoice_items/replace', {
@@ -564,8 +565,13 @@ export async function applyCatalogPricesToDraftInvoices(options?: { skipInvoiceI
     }
 
     if (!changed) continue;
-    const lineSum = nextLines.reduce((sum, line) => sum + (line.amount || 0), 0);
-    const totals = invoiceTotals(lineSum, invoice.tax_rate || 0, invoice.tax_type === 'inclusive' ? 'inclusive' : 'exclusive');
+    const { taxableSum, nonTaxableSum } = lineSumsByTax(nextLines);
+    const totals = invoiceTotals(
+      taxableSum,
+      invoice.tax_rate || 0,
+      invoice.tax_type === 'inclusive' ? 'inclusive' : 'exclusive',
+      nonTaxableSum
+    );
     await updateInvoice(invoice.id, {
       subtotal: totals.subtotal,
       tax_amount: totals.taxAmount,

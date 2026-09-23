@@ -9,6 +9,7 @@ export type InvoicePdfItem = {
   quantity_unit?: string;
   unit_price?: number;
   amount?: number;
+  tax_exempt?: boolean;
 };
 
 export type InvoicePdfRequest = {
@@ -23,7 +24,10 @@ export type InvoicePdfRequest = {
   dueDate?: string | null;
   taxRate?: number;
   subtotal?: number;
+  /** 課税ベース（{{課税小計}}）。未指定時は subtotal */
+  taxableSubtotal?: number;
   taxAmount?: number;
+  nonTaxableAmount?: number;
   totalAmount?: number;
   notes?: string | null;
   items?: InvoicePdfItem[];
@@ -37,6 +41,7 @@ type Line = {
   quantity_unit: string;
   unit_price: number;
   amount: number;
+  tax_exempt: boolean;
 };
 
 type ScalarMap = Record<string, string | number>;
@@ -89,6 +94,8 @@ const SCALAR_TOKENS = [
   '{{税込請求金額}}',
   '{{支払日}}',
   '{{小計}}',
+  '{{課税小計}}',
+  '{{非課税額}}',
   '{{消費税額}}',
   '{{消費税率}}',
   '{{合計金額}}',
@@ -97,15 +104,8 @@ const SCALAR_TOKENS = [
 
 const LINE_TOKENS = ['{{品目}}', '{{数量}}', '{{単位}}', '{{単価}}', '{{金額}}'] as const;
 const ALL_TOKENS = [...SCALAR_TOKENS, ...LINE_TOKENS];
-const NUMERIC_TOKENS = new Set([
-  '{{税込請求金額}}',
-  '{{小計}}',
-  '{{消費税額}}',
-  '{{合計金額}}',
-  '{{単価}}',
-  '{{金額}}',
-  '{{数量}}',
-]);
+/** 数量のみ数値。金額系・税率はアプリが文字列（￥ / %）で書き込む */
+const NUMERIC_TOKENS = new Set(['{{数量}}']);
 
 const INVOICE_BODY_LINES = 15;
 const DETAIL_BODY_LINES = 30;
@@ -148,6 +148,16 @@ function asMoney(value: unknown) {
 
 function formatGrouped(value: number) {
   return Math.round(value).toLocaleString('ja-JP');
+}
+
+/** テンプレは文字列セル想定。通貨記号はアプリ側で付与 */
+function formatYen(value: unknown) {
+  return `￥${formatGrouped(asMoney(value))}`;
+}
+
+function formatYenLineAmount(value: unknown, taxExempt: boolean) {
+  const text = formatYen(value);
+  return taxExempt ? `${text}(※)` : text;
 }
 
 function formatRate(value: unknown) {
@@ -210,31 +220,38 @@ function linesFrom(items: InvoicePdfItem[] | undefined): Line[] {
     quantity_unit: item.quantity_unit === '式' ? '式' : item.quantity_unit || '日',
     unit_price: asMoney(item.unit_price),
     amount: asMoney(item.amount),
+    tax_exempt: Boolean(item.tax_exempt),
   }));
 }
 
 function scalarsFrom(input: InvoicePdfRequest): ScalarMap {
   const total = asMoney(input.totalAmount);
+  const subtotal = asMoney(input.subtotal);
+  const taxableSubtotal =
+    input.taxableSubtotal != null && Number.isFinite(Number(input.taxableSubtotal))
+      ? asMoney(input.taxableSubtotal)
+      : subtotal;
+  const nonTaxable = asMoney(input.nonTaxableAmount);
   return {
     '{{クライアント名}}': input.clientName?.trim() || '',
     '{{代表者名}}': input.representativeName?.trim() || '',
     '{{発行日}}': formatIssueDate(input.issueDate),
     '{{請求書No}}': input.invoiceNumber?.trim() || '',
     '{{件名}}': input.subject?.trim() || '',
-    '{{税込請求金額}}': total,
+    '{{税込請求金額}}': formatYen(total),
     '{{支払日}}': formatDueDate(input.dueDate),
-    '{{小計}}': asMoney(input.subtotal),
-    '{{消費税額}}': asMoney(input.taxAmount),
+    '{{小計}}': formatYen(subtotal),
+    '{{課税小計}}': formatYen(taxableSubtotal),
+    '{{非課税額}}': formatYen(nonTaxable),
+    '{{消費税額}}': formatYen(input.taxAmount),
     '{{消費税率}}': formatRate(input.taxRate),
-    '{{合計金額}}': total,
+    '{{合計金額}}': formatYen(total),
     '{{備考}}': input.notes?.trim() || '',
   };
 }
 
 function numericValue(token: string, item: Line | null, scalars: ScalarMap) {
   if (token === '{{数量}}') return item?.quantity ?? 0;
-  if (token === '{{単価}}') return item?.unit_price ?? 0;
-  if (token === '{{金額}}') return item?.amount ?? 0;
   const value = scalars[token];
   return typeof value === 'number' ? value : 0;
 }
@@ -251,8 +268,8 @@ function renderCell(text: string, item: Line | null, scalars: ScalarMap): string
   next = next.split('{{品目}}').join(item?.description ?? '');
   next = next.split('{{数量}}').join(item ? String(item.quantity) : '');
   next = next.split('{{単位}}').join(item?.quantity_unit ?? '');
-  next = next.split('{{単価}}').join(item ? formatGrouped(item.unit_price) : '');
-  next = next.split('{{金額}}').join(item ? formatGrouped(item.amount) : '');
+  next = next.split('{{単価}}').join(item ? formatYen(item.unit_price) : '');
+  next = next.split('{{金額}}').join(item ? formatYenLineAmount(item.amount, item.tax_exempt) : '');
   return next;
 }
 

@@ -34,16 +34,20 @@ export function compareCreatedAt(a: { created_at?: string | null }, b: { created
 export const DEFAULT_APP_NAME = 'Stagecrew';
 export const DEFAULT_APP_TAGLINE = '業務管理';
 export const DEFAULT_APP_FOOTER = 'スケジュール・請求書管理システム';
-/** 画面表示。Docker タグは alpha_3.3.0（タグに α は使えない）。 */
-export const APP_VERSION_LABEL = 'ver α_3.3.0';
+/** 画面表示。Docker タグは alpha_3.4.0（タグに α は使えない）。 */
+export const APP_VERSION_LABEL = 'ver α_3.4.0';
 
 export interface GoogleIntegrationSettings {
   id: number;
   google_calendar_id: string | null;
   invoice_template_ext_tax_url: string | null;
   invoice_template_int_tax_url: string | null;
+  /** 外税かつ非課税明細あり（15行以内） */
+  invoice_template_ext_nontax_url: string | null;
   invoice_template_detail_ext_tax_url: string | null;
   invoice_template_detail_int_tax_url: string | null;
+  /** 外税かつ非課税明細あり（16行以上） */
+  invoice_template_detail_ext_nontax_url: string | null;
   invoice_pdf_drive_folder_url: string | null;
   gmail_sender_email: string | null;
   data_spreadsheet_url: string | null;
@@ -203,15 +207,47 @@ export function taxSettingLabel(taxRate: number, taxType?: TaxType | null) {
   return `消費税 ${taxRate}%`;
 }
 
-export function invoiceTotals(lineSum: number, taxRate: number, taxType: TaxType) {
-  const rate = Number.isFinite(taxRate) ? Math.max(0, taxRate) : 0;
-  const base = Math.max(0, Math.round(lineSum));
-  if (taxType === 'inclusive') {
-    const taxAmount = Math.floor((base * rate) / (100 + rate));
-    return { subtotal: base - taxAmount, taxAmount, total: base };
+export function lineSumsByTax(
+  items: { amount?: number | null; tax_exempt?: boolean | null }[]
+): { taxableSum: number; nonTaxableSum: number } {
+  let taxableSum = 0;
+  let nonTaxableSum = 0;
+  for (const item of items) {
+    const amount = Math.max(0, Math.round(Number(item.amount) || 0));
+    if (item.tax_exempt) nonTaxableSum += amount;
+    else taxableSum += amount;
   }
-  const taxAmount = Math.floor((base * rate) / 100);
-  return { subtotal: base, taxAmount, total: base + taxAmount };
+  return { taxableSum, nonTaxableSum };
+}
+
+/** taxableSum にのみ税率を適用。nonTaxableSum は税なしで合計に加算。 */
+export function invoiceTotals(
+  taxableSum: number,
+  taxRate: number,
+  taxType: TaxType,
+  nonTaxableSum = 0
+) {
+  const rate = Number.isFinite(taxRate) ? Math.max(0, taxRate) : 0;
+  const taxable = Math.max(0, Math.round(taxableSum));
+  const nonTaxable = Math.max(0, Math.round(nonTaxableSum));
+  if (taxType === 'inclusive') {
+    const taxAmount = Math.floor((taxable * rate) / (100 + rate));
+    return {
+      subtotal: taxable - taxAmount,
+      taxAmount,
+      nonTaxable,
+      taxableSum: taxable,
+      total: taxable + nonTaxable,
+    };
+  }
+  const taxAmount = Math.floor((taxable * rate) / 100);
+  return {
+    subtotal: taxable,
+    taxAmount,
+    nonTaxable,
+    taxableSum: taxable,
+    total: taxable + taxAmount + nonTaxable,
+  };
 }
 
 export const INVOICE_PLACEHOLDERS = [
@@ -220,17 +256,19 @@ export const INVOICE_PLACEHOLDERS = [
   { label: '発行日', token: '{{発行日}}', note: 'yyyy/m/d' },
   { label: '請求書No.', token: '{{請求書No}}', note: '' },
   { label: '件名', token: '{{件名}}', note: '' },
-  { label: '税込みのトータル請求金額', token: '{{税込請求金額}}', note: '合計金額と同じ税込額' },
+  { label: '税込みのトータル請求金額', token: '{{税込請求金額}}', note: '￥付き文字列。合計金額と同じ' },
   { label: '支払日', token: '{{支払日}}', note: 'YYYY年M月D日' },
   { label: '品目', token: '{{品目}}', note: '明細行' },
   { label: '数量', token: '{{数量}}', note: '明細行' },
   { label: '単位', token: '{{単位}}', note: '明細行' },
-  { label: '単価', token: '{{単価}}', note: '明細行。数値' },
-  { label: '金額', token: '{{金額}}', note: '明細行。数値' },
-  { label: '小計', token: '{{小計}}', note: '数値' },
-  { label: '消費税額', token: '{{消費税額}}', note: '数値。端数は切り捨て' },
-  { label: '消費税率', token: '{{消費税率}}', note: '10%' },
-  { label: '合計金額', token: '{{合計金額}}', note: '税込。数値' },
+  { label: '単価', token: '{{単価}}', note: '明細行。￥付き文字列' },
+  { label: '金額', token: '{{金額}}', note: '明細行。￥付き。非課税は ￥…(※)' },
+  { label: '小計', token: '{{小計}}', note: '課税分の小計。￥付き文字列' },
+  { label: '課税小計', token: '{{課税小計}}', note: '非課税あり用。小計と同じ課税ベース。￥付き' },
+  { label: '非課税額', token: '{{非課税額}}', note: '非課税あり用。￥付き文字列' },
+  { label: '消費税額', token: '{{消費税額}}', note: '￥付き。端数は切り捨て' },
+  { label: '消費税率', token: '{{消費税率}}', note: '例: 10%' },
+  { label: '合計金額', token: '{{合計金額}}', note: '税込。￥付き文字列' },
   { label: '備考', token: '{{備考}}', note: '' },
 ] as const;
 
@@ -245,6 +283,8 @@ export interface InvoiceItem {
   quantity_unit?: QuantityUnit | null;
   unit_price?: number;
   amount: number;
+  /** true = 消費税非課税（交通費など）。外税請求書の税額計算から除外 */
+  tax_exempt?: boolean | null;
   sort_order?: number | null;
   price_manual?: boolean | null;
   created_at: string;

@@ -30,8 +30,10 @@ export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
     google_calendar_id: '',
     invoice_template_ext_tax_url: '',
     invoice_template_int_tax_url: '',
+    invoice_template_ext_nontax_url: '',
     invoice_template_detail_ext_tax_url: '',
     invoice_template_detail_int_tax_url: '',
+    invoice_template_detail_ext_nontax_url: '',
     invoice_pdf_drive_folder_url: '',
     gmail_sender_email: '',
     data_spreadsheet_url: '',
@@ -47,8 +49,10 @@ export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
       google_calendar_id: data.google_calendar_id || '',
       invoice_template_ext_tax_url: data.invoice_template_ext_tax_url || '',
       invoice_template_int_tax_url: data.invoice_template_int_tax_url || '',
+      invoice_template_ext_nontax_url: data.invoice_template_ext_nontax_url || '',
       invoice_template_detail_ext_tax_url: data.invoice_template_detail_ext_tax_url || '',
       invoice_template_detail_int_tax_url: data.invoice_template_detail_int_tax_url || '',
+      invoice_template_detail_ext_nontax_url: data.invoice_template_detail_ext_nontax_url || '',
       invoice_pdf_drive_folder_url: data.invoice_pdf_drive_folder_url || '',
       gmail_sender_email: data.gmail_sender_email || '',
       data_spreadsheet_url: data.data_spreadsheet_url || '',
@@ -107,8 +111,10 @@ export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
       google_calendar_id: calendarId || null,
       invoice_template_ext_tax_url: form.invoice_template_ext_tax_url || null,
       invoice_template_int_tax_url: form.invoice_template_int_tax_url || null,
+      invoice_template_ext_nontax_url: form.invoice_template_ext_nontax_url || null,
       invoice_template_detail_ext_tax_url: form.invoice_template_detail_ext_tax_url || null,
       invoice_template_detail_int_tax_url: form.invoice_template_detail_int_tax_url || null,
+      invoice_template_detail_ext_nontax_url: form.invoice_template_detail_ext_nontax_url || null,
       invoice_pdf_drive_folder_url: form.invoice_pdf_drive_folder_url || null,
       gmail_sender_email: form.gmail_sender_email.trim() || null,
       data_spreadsheet_url: sheetUrl,
@@ -543,6 +549,22 @@ export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
               </div>
             </FormField>
 
+            <FormField label="外税（非課税あり）テンプレートURL">
+              <div className="relative">
+                <Link2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="url"
+                  value={form.invoice_template_ext_nontax_url}
+                  onChange={(e) => setForm({ ...form, invoice_template_ext_nontax_url: e.target.value })}
+                  className={`${inputClass} pl-10`}
+                  placeholder="https://docs.google.com/spreadsheets/d/..."
+                />
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                交通費など非課税明細を含む外税請求書用。{'{{非課税額}}'} などを置いたレイアウトを登録します。
+              </p>
+            </FormField>
+
             <div className="rounded-lg border border-slate-100 p-3">
               <p className="mb-3 text-xs font-medium text-slate-600">16行以上用（請求書＋明細書）</p>
               <div className="space-y-3">
@@ -566,6 +588,19 @@ export function SettingsPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
                       type="url"
                       value={form.invoice_template_detail_int_tax_url}
                       onChange={(e) => setForm({ ...form, invoice_template_detail_int_tax_url: e.target.value })}
+                      className={`${inputClass} pl-10`}
+                      placeholder="https://docs.google.com/spreadsheets/d/..."
+                    />
+                  </div>
+                </FormField>
+
+                <FormField label="16行以上用（外税・非課税あり）URL">
+                  <div className="relative">
+                    <Link2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="url"
+                      value={form.invoice_template_detail_ext_nontax_url}
+                      onChange={(e) => setForm({ ...form, invoice_template_detail_ext_nontax_url: e.target.value })}
                       className={`${inputClass} pl-10`}
                       placeholder="https://docs.google.com/spreadsheets/d/..."
                     />

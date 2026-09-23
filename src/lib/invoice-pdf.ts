@@ -6,6 +6,7 @@ export type InvoicePdfItem = {
   quantity_unit: string;
   unit_price: number;
   amount: number;
+  tax_exempt?: boolean;
 };
 
 export type InvoicePdfRequest = {
@@ -20,7 +21,9 @@ export type InvoicePdfRequest = {
   dueDate?: string | null;
   taxRate?: number;
   subtotal?: number;
+  taxableSubtotal?: number;
   taxAmount?: number;
+  nonTaxableAmount?: number;
   totalAmount?: number;
   notes?: string | null;
   items: InvoicePdfItem[];

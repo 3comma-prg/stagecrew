@@ -27,6 +27,7 @@ import {
   strongerBilling,
   taskDateRange,
   invoiceTotals,
+  lineSumsByTax,
   TAX_TYPE_LABELS,
   clientName,
   compareCreatedAt,
@@ -99,6 +100,7 @@ type EditInvoiceItem = {
   period?: DateRange | null;
   sort_order?: number | null;
   price_manual?: boolean;
+  tax_exempt?: boolean;
 };
 
 
@@ -339,6 +341,7 @@ function lineFromTask(
     task,
     period,
     price_manual: false,
+    tax_exempt: false,
   };
 }
 
@@ -641,6 +644,7 @@ export function InvoicesPage() {
         period: item.task ? taskDateRange(item.task) : null,
         sort_order: item.sort_order,
         price_manual: Boolean(item.price_manual),
+        tax_exempt: Boolean(item.tax_exempt),
       };
     });
     if (items.some((_, index) => correctCrossMonthLine(inv.invoice_items[index], inv.billing_month, priceList).corrected)) {
@@ -692,8 +696,13 @@ export function InvoicesPage() {
       ? []
       : await fetchMonthTasks(inv.client_id, inv.billing_month);
     const ordered = orderLineItems(items, inv.billing_month, monthTasks);
-    const lineSum = ordered.reduce((sum, item) => sum + item.amount, 0);
-    const totals = invoiceTotals(lineSum, inv.tax_rate || 0, inv.tax_type === 'inclusive' ? 'inclusive' : 'exclusive');
+    const { taxableSum, nonTaxableSum } = lineSumsByTax(ordered);
+    const totals = invoiceTotals(
+      taxableSum,
+      inv.tax_rate || 0,
+      inv.tax_type === 'inclusive' ? 'inclusive' : 'exclusive',
+      nonTaxableSum
+    );
     setPreviewPrices(priceList);
     setPreviewing({
       ...inv,
@@ -712,8 +721,14 @@ export function InvoicesPage() {
     setFormErrors(errors);
     if (errors.length) return;
     setSaving(true);
-    const lineSum = editItems.reduce((sum, item) => sum + itemAmount(item.quantity, item.unit_price), 0);
-    const totals = invoiceTotals(lineSum, form.tax_rate, form.tax_type);
+    const amounts = editItems
+      .filter((item) => item.description.trim())
+      .map((item) => ({
+        amount: itemAmount(item.quantity, item.unit_price),
+        tax_exempt: Boolean(item.tax_exempt),
+      }));
+    const { taxableSum, nonTaxableSum } = lineSumsByTax(amounts);
+    const totals = invoiceTotals(taxableSum, form.tax_rate, form.tax_type, nonTaxableSum);
     const invoiceFields = {
       client_id: form.client_id,
       billing_month: form.billing_month,
@@ -740,6 +755,7 @@ export function InvoicesPage() {
         amount: itemAmount(item.quantity, item.unit_price),
         sort_order: index,
         price_manual: Boolean(item.price_manual || !item.task_id),
+        tax_exempt: Boolean(item.tax_exempt),
       }));
 
     try {
@@ -777,7 +793,7 @@ export function InvoicesPage() {
   const addItem = () => {
     setEditItems([
       ...editItems,
-      { key: newItemKey(), id: null, description: '', quantity: 1, quantity_unit: '日', unit_price: 0, amount: 0, task_id: null, price_manual: true },
+      { key: newItemKey(), id: null, description: '', quantity: 1, quantity_unit: '日', unit_price: 0, amount: 0, task_id: null, price_manual: true, tax_exempt: false },
     ]);
   };
 
@@ -991,8 +1007,13 @@ export function InvoicesPage() {
           const group = taxType === 'inclusive' ? inclusiveItems : exclusiveItems;
           const ordered = orderLineItems(maybeMerge(group), form.billing_month, monthTasks);
           const taxRate = dominantTaxRate(ordered, priceList, fallbackRate);
-          const lineSum = ordered.reduce((sum, item) => sum + itemAmount(item.quantity, item.unit_price), 0);
-          const totals = invoiceTotals(lineSum, taxRate, taxType);
+          const { taxableSum, nonTaxableSum } = lineSumsByTax(
+            ordered.map((item) => ({
+              amount: itemAmount(item.quantity, item.unit_price),
+              tax_exempt: Boolean(item.tax_exempt),
+            }))
+          );
+          const totals = invoiceTotals(taxableSum, taxRate, taxType, nonTaxableSum);
           const invoiceNumber = nextInvoiceNumber(known, form.billing_month);
           const created = await createInvoice({
             client_id: form.client_id,
@@ -1022,6 +1043,7 @@ export function InvoicesPage() {
                 amount: itemAmount(item.quantity, item.unit_price),
                 sort_order: index,
                 price_manual: Boolean(item.price_manual || !item.task_id),
+                tax_exempt: Boolean(item.tax_exempt),
               }))
           );
           await syncTaskBillingStatus(ordered.map((item) => item.task_id));
@@ -1106,12 +1128,15 @@ export function InvoicesPage() {
 
   const formatYen = (n: number) => `¥${n.toLocaleString()}`;
   const selectedClient = clients.find((client) => client.id === form.client_id) || null;
-  const formTotals = invoiceTotals(
-    editItems.reduce((sum, item) => sum + itemAmount(item.quantity, item.unit_price), 0),
-    form.tax_rate,
-    form.tax_type
+  const formLineSums = lineSumsByTax(
+    editItems.map((item) => ({
+      amount: itemAmount(item.quantity, item.unit_price),
+      tax_exempt: Boolean(item.tax_exempt),
+    }))
   );
+  const formTotals = invoiceTotals(formLineSums.taxableSum, form.tax_rate, form.tax_type, formLineSums.nonTaxableSum);
   const unsetPriceCount = editItems.filter((item) => isUnsetInvoicePrice(item)).length;
+  const formHasNontax = formLineSums.nonTaxableSum > 0;
 
   const applyBillingMonth = (billingMonth: string) => {
     setForm((current) => {
@@ -1136,12 +1161,27 @@ export function InvoicesPage() {
   const buildPdfRequest = useCallback((invoice: InvoiceWithItems, prices: UnitPrice[]): InvoicePdfRequest | null => {
     const settings = loadSettings();
     const inclusive = invoice.tax_type === 'inclusive';
-    const templateUrl = inclusive ? settings.invoice_template_int_tax_url : settings.invoice_template_ext_tax_url;
+    const hasNontax = invoice.invoice_items.some((item) => Boolean(item.tax_exempt));
+    const useNontaxTemplate = hasNontax && !inclusive;
+    const templateUrl = inclusive
+      ? settings.invoice_template_int_tax_url
+      : useNontaxTemplate
+        ? settings.invoice_template_ext_nontax_url
+        : settings.invoice_template_ext_tax_url;
     const detailTemplateUrl = inclusive
       ? settings.invoice_template_detail_int_tax_url
-      : settings.invoice_template_detail_ext_tax_url;
+      : useNontaxTemplate
+        ? settings.invoice_template_detail_ext_nontax_url
+        : settings.invoice_template_detail_ext_tax_url;
     const useDetail = invoice.invoice_items.length > 15;
     if (useDetail ? !detailTemplateUrl : !templateUrl) return null;
+    const { taxableSum, nonTaxableSum } = lineSumsByTax(invoice.invoice_items);
+    const totals = invoiceTotals(
+      taxableSum,
+      invoice.tax_rate || 0,
+      inclusive ? 'inclusive' : 'exclusive',
+      nonTaxableSum
+    );
     return {
       templateUrl: templateUrl || detailTemplateUrl || '',
       detailTemplateUrl,
@@ -1153,9 +1193,11 @@ export function InvoicesPage() {
       subject: invoice.subject,
       dueDate: invoice.due_date,
       taxRate: invoice.tax_rate || 0,
-      subtotal: invoice.subtotal,
-      taxAmount: invoice.tax_amount,
-      totalAmount: invoice.total_amount,
+      subtotal: totals.subtotal,
+      taxableSubtotal: totals.taxableSum,
+      taxAmount: totals.taxAmount,
+      nonTaxableAmount: totals.nonTaxable,
+      totalAmount: totals.total,
       notes: invoice.notes,
       items: invoice.invoice_items.map((item) => {
         const line = correctCrossMonthLine(item, invoice.billing_month, prices);
@@ -1165,10 +1207,29 @@ export function InvoicesPage() {
           quantity_unit: line.quantity_unit,
           unit_price: line.unit_price,
           amount: itemAmount(line.quantity, line.unit_price),
+          tax_exempt: Boolean(item.tax_exempt),
         };
       }),
     };
   }, []);
+
+  const templateMissingMessage = (invoice: InvoiceWithItems) => {
+    const hasNontax = invoice.invoice_items.some((item) => Boolean(item.tax_exempt));
+    const useDetail = invoice.invoice_items.length > 15;
+    if (invoice.tax_type === 'inclusive') {
+      return useDetail
+        ? '設定に明細書（内税）テンプレートのURLを登録してください。'
+        : '設定に内税テンプレートのURLを登録してください。';
+    }
+    if (hasNontax) {
+      return useDetail
+        ? '設定に明細書（外税・非課税あり）テンプレートのURLを登録してください。'
+        : '設定に外税（非課税あり）テンプレートのURLを登録してください。';
+    }
+    return useDetail
+      ? '設定に明細書（外税）テンプレートのURLを登録してください。'
+      : '設定に外税テンプレートのURLを登録してください。';
+  };
 
   useEffect(() => {
     if (view !== 'preview' || !previewing) return;
@@ -1176,15 +1237,7 @@ export function InvoicesPage() {
     const request = buildPdfRequest(previewing, previewPrices);
     if (!request) {
       setTemplatePreviewBlob(null);
-      setTemplatePreviewError(
-        previewing.invoice_items.length > 15
-          ? previewing.tax_type === 'inclusive'
-            ? '設定に明細書（内税）テンプレートのURLを登録してください。'
-            : '設定に明細書（外税）テンプレートのURLを登録してください。'
-          : previewing.tax_type === 'inclusive'
-            ? '設定に内税テンプレートのURLを登録してください。'
-            : '設定に外税テンプレートのURLを登録してください。'
-      );
+      setTemplatePreviewError(templateMissingMessage(previewing));
       setTemplatePreviewLoading(false);
       return;
     }
@@ -1215,15 +1268,6 @@ export function InvoicesPage() {
   const pdfOnlyDoneMessage = '請求書PDFをGoogleドライブに保存しました';
   const mailOnlyDoneMessage = 'Gmail下書きの作成が完了しました';
   const pdfAndGmailDoneMessage = '請求書PDFの出力およびGmail下書きの作成が完了しました';
-
-  const templateMissingMessage = (invoice: InvoiceWithItems) =>
-    invoice.invoice_items.length > 15
-      ? invoice.tax_type === 'inclusive'
-        ? '設定に明細書（内税）テンプレートのURLを登録してください。'
-        : '設定に明細書（外税）テンプレートのURLを登録してください。'
-      : invoice.tax_type === 'inclusive'
-        ? '設定に内税テンプレートのURLを登録してください。'
-        : '設定に外税テンプレートのURLを登録してください。';
 
   const createGmailDraftForInvoice = async (invoice: InvoiceWithItems, filename: string, blob: Blob) => {
     if (!loadSettings().gmail_sender_email?.trim()) {
@@ -1284,8 +1328,13 @@ export function InvoicesPage() {
     }
     const monthTasks = hasSavedOrder(inv.invoice_items) ? [] : await fetchMonthTasks(inv.client_id, inv.billing_month);
     const ordered = orderLineItems(items, inv.billing_month, monthTasks);
-    const lineSum = ordered.reduce((sum, item) => sum + item.amount, 0);
-    const totals = invoiceTotals(lineSum, inv.tax_rate || 0, inv.tax_type === 'inclusive' ? 'inclusive' : 'exclusive');
+    const { taxableSum, nonTaxableSum } = lineSumsByTax(ordered);
+    const totals = invoiceTotals(
+      taxableSum,
+      inv.tax_rate || 0,
+      inv.tax_type === 'inclusive' ? 'inclusive' : 'exclusive',
+      nonTaxableSum
+    );
     return {
       prices: priceList,
       invoice: {
@@ -2234,6 +2283,11 @@ export function InvoicesPage() {
                             手動
                           </span>
                         ) : null}
+                        {item.tax_exempt ? (
+                          <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                            非課税
+                          </span>
+                        ) : null}
                       </div>
                       <button
                         type="button"
@@ -2300,20 +2354,40 @@ export function InvoicesPage() {
                         <label className="mb-1 block text-xs font-semibold text-slate-500">金額</label>
                         <div className="flex min-h-11 items-center justify-end rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 md:min-h-0 md:h-[38px]">
                           {formatYen(itemAmount(item.quantity, item.unit_price))}
+                          {item.tax_exempt ? <span className="ml-1 text-xs text-slate-500">(※)</span> : null}
                         </div>
                       </div>
                     </div>
+                    <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(item.tax_exempt)}
+                        onChange={(e) => updateItem(i, 'tax_exempt', e.target.checked)}
+                        className="rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                      />
+                      非課税（交通費など・消費税の対象外）
+                    </label>
                   </div>
                 ))}
               </div>
             )}
             <div className="mt-2 space-y-1 text-right text-sm text-slate-500">
-              <p>小計: <span className="font-medium text-slate-800">{formatYen(formTotals.subtotal)}</span></p>
+              <p>
+                小計（課税）: <span className="font-medium text-slate-800">{formatYen(formTotals.subtotal)}</span>
+              </p>
+              {formHasNontax ? (
+                <p>
+                  非課税: <span className="font-medium text-slate-800">{formatYen(formTotals.nonTaxable)}</span>
+                </p>
+              ) : null}
               <p>消費税額: <span className="font-medium text-slate-800">{formatYen(formTotals.taxAmount)}</span></p>
               <p>
                 合計金額 / 税込請求金額:{' '}
                 <span className="font-bold text-teal-700">{formatYen(formTotals.total)}</span>
               </p>
+              {formHasNontax && form.tax_type === 'exclusive' ? (
+                <p className="text-xs text-slate-400">PDFは「外税（非課税あり）」テンプレートを使います</p>
+              ) : null}
             </div>
           </div>
 

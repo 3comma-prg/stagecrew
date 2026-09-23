@@ -6,8 +6,10 @@ export type AppSettingsRecord = {
   google_calendar_id: string | null;
   invoice_template_ext_tax_url: string | null;
   invoice_template_int_tax_url: string | null;
+  invoice_template_ext_nontax_url: string | null;
   invoice_template_detail_ext_tax_url: string | null;
   invoice_template_detail_int_tax_url: string | null;
+  invoice_template_detail_ext_nontax_url: string | null;
   invoice_pdf_drive_folder_url: string | null;
   gmail_sender_email: string | null;
   data_spreadsheet_url: string | null;
@@ -24,8 +26,10 @@ const SETTING_KEYS: (keyof AppSettingsRecord)[] = [
   'google_calendar_id',
   'invoice_template_ext_tax_url',
   'invoice_template_int_tax_url',
+  'invoice_template_ext_nontax_url',
   'invoice_template_detail_ext_tax_url',
   'invoice_template_detail_int_tax_url',
+  'invoice_template_detail_ext_nontax_url',
   'invoice_pdf_drive_folder_url',
   'gmail_sender_email',
   'data_spreadsheet_url',
@@ -44,8 +48,10 @@ function emptySettings(): AppSettingsRecord {
     google_calendar_id: null,
     invoice_template_ext_tax_url: null,
     invoice_template_int_tax_url: null,
+    invoice_template_ext_nontax_url: null,
     invoice_template_detail_ext_tax_url: null,
     invoice_template_detail_int_tax_url: null,
+    invoice_template_detail_ext_nontax_url: null,
     invoice_pdf_drive_folder_url: null,
     gmail_sender_email: null,
     data_spreadsheet_url: null,
@@ -133,8 +139,10 @@ function hasSharedValues(settings: AppSettingsRecord) {
       settings.google_calendar_id ||
       settings.invoice_template_ext_tax_url ||
       settings.invoice_template_int_tax_url ||
+      settings.invoice_template_ext_nontax_url ||
       settings.invoice_template_detail_ext_tax_url ||
       settings.invoice_template_detail_int_tax_url ||
+      settings.invoice_template_detail_ext_nontax_url ||
       settings.invoice_pdf_drive_folder_url ||
       settings.gmail_sender_email ||
       settings.custom_task_types ||

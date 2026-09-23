@@ -137,6 +137,7 @@ export const SHEETS: SheetSpec[] = [
       { key: 'quantity_unit', header: '単位', type: 'string', fallback: '日' },
       { key: 'unit_price', header: '単価', type: 'number', fallback: 0 },
       { key: 'amount', header: '金額', type: 'number', fallback: 0 },
+      { key: 'tax_exempt', header: '非課税', type: 'boolean', fallback: false, aliases: ['税非課税'] },
       { key: 'sort_order', header: '並び順', type: 'number', fallback: null },
       { key: 'price_manual', header: '手動単価', type: 'boolean', fallback: false },
       createdAt,
